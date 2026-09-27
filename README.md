@@ -1,4 +1,6 @@
-# Agent Pay
+# Crossroad
+
+*Formerly Agent Pay.* Where agents meet payments.
 
 Parametric insurance that settles itself: two independent data sources decide the payout, and the money moves on Solana the moment the rule is hit — no adjuster, no claim form, no waiting.
 
@@ -10,7 +12,7 @@ Traditional parametric insurance still relies on a single data feed and a manual
 
 ## The solution
 
-Agent Pay reads two independent sources for every policy (plus a satellite crop-health index where relevant) and applies a deterministic formula to decide how much is owed. When the sources agree, the full amount pays out immediately. When they disagree, only the portion every source agrees on is paid at once; the disputed remainder is held in an on-chain escrow account until a fresh reading resolves it or a human reviewer decides. An AI watchdog can explain *why* sources disagree, but it never sets a payout amount or moves funds — only the formula and a human reviewer can do that.
+Crossroad reads two independent sources for every policy (plus a satellite crop-health index where relevant) and applies a deterministic formula to decide how much is owed. When the sources agree, the full amount pays out immediately. When they disagree, only the portion every source agrees on is paid at once; the disputed remainder is held in an on-chain escrow account until a fresh reading resolves it or a human reviewer decides. An AI watchdog can explain *why* sources disagree, but it never sets a payout amount or moves funds — only the formula and a human reviewer can do that.
 
 Every payout is a real transaction on Solana devnet, verifiable on [Solana Explorer](https://explorer.solana.com/address/D93HiJbqXdt13pQxmehaqFvYGieRGrvXHxcVXt584N8B?cluster=devnet).
 
@@ -111,7 +113,7 @@ None of these `.env`/`.env.local`/`.env.example` values or keypairs contain real
 
 This is a hackathon prototype. Known gaps:
 
-- **Pricing / premiums are not implemented.** Policies are created with a fixed cover amount; there is no premium calculation, underwriting, or payment collection from the policyholder.
+- **Premiums are a flat demo rate, not real pricing.** Every policy costs 3% of its cover, paid upfront to the insurer wallet and not refundable. There is no risk-based pricing or underwriting.
 - **Travel delay data is simulated.** The other three products read live weather/satellite/event data; travel delay currently uses demo feeds only.
 - **On-chain escrow is opt-in.** The default escrow path is a JSON ledger in the backend; the deployed vault program is used only when `AGENT_PAY_ONCHAIN_ESCROW=1` is set.
 - **Devnet only.** Nothing here is audited or intended for mainnet funds.
