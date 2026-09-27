@@ -54,7 +54,8 @@ def inputs_hash(policy: Policy, readings: list[SourceReading]) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
-def build_proof(policy: Policy, readings: list[SourceReading], floor_ratio: float, ceiling_ratio: float, dispute: DisputeReport | dict | None) -> dict:
+def build_proof(policy: Policy, readings: list[SourceReading], floor_ratio: float, ceiling_ratio: float, dispute: DisputeReport | dict | None,
+                settled: float | None = None) -> dict:
     ratios = [(r, r.payout_ratio if r.payout_ratio is not None else 0.0) for r in readings]
     worst = min(ratios, key=lambda p: p[1])   # least loss -> floor
     best = max(ratios, key=lambda p: p[1])    # most loss -> ceiling
@@ -72,8 +73,10 @@ def build_proof(policy: Policy, readings: list[SourceReading], floor_ratio: floa
         "formula": FORMULA,
         "floor_calc": f"floor  = {calc_line(policy, worst[0], floor_ratio)}  [{worst[0].source}]",
         "ceiling_calc": f"ceiling = {calc_line(policy, best[0], ceiling_ratio)}  [{best[0].source}]",
+        "settled_calc": (f"paid    = median({', '.join(f'{x:.4f}' for x in sorted(r for _, r in ratios))}) = {settled:.4f}"
+                         if settled is not None else None),
         "tolerance": DEFAULT_TOLERANCE,
         "inputs_hash": inputs_hash(policy, readings),
         "ai_involvement": "explanation-only \u2014 did not set the amount" if dispute else "none",
-        "data_source_note": "demo data source, same dispute/escrow mechanics as the live weather products" if policy.product_type == "travel_delay" else None,
+        "data_source_note": "demo data source, same settlement mechanics as the live weather products" if policy.product_type == "travel_delay" else None,
     }

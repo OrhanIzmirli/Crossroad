@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Brand, CrossroadMark } from './Brand';
-import { ArrowUpRight, ArrowRight, X as XIcon } from 'lucide-react';
+import { ArrowUpRight, ArrowRight } from 'lucide-react';
 import { explorer } from './api';
 import './landing.css';
 
@@ -101,7 +101,7 @@ export default function Landing() {
         <div><b data-count="3">0</b><span>cross-checks before a single lamport moves</span></div>
         <div><b data-count="100" data-suffix="%">0%</b><span>of payouts settled as real transactions on Solana</span></div>
         <div className="lp-num-sol"><b><svg className="sol-mark" viewBox="0 0 24 20" aria-hidden="true"><path d="M4.6 0h19.4l-4.6 4.8H0z"/><path d="M4.6 7.6h19.4L19.4 12.4H0z"/><path d="M4.6 15.2h19.4L19.4 20H0z"/></svg></b><span>runs on Solana devnet · about a second per payout, a fraction of a cent in fees · <a href={explorer('address', WALLET)} target="_blank" rel="noreferrer">see the wallet</a></span></div>
-        <p className="lp-foot-note">Sources are compared automatically. When they agree, the formula pays in full. When they disagree, the floor is paid now and only the difference waits for review.</p>
+        <p className="lp-foot-note">Sources are compared automatically. When they agree, the formula pays in full. When they disagree, the middle reading decides, so one wrong source cannot change the payout. Nothing waits.</p>
       </div>
       <div className="lp-marquee" aria-hidden="true"><div className="lp-marquee-track">{Array.from({ length: 4 }, (_, i) => <span key={i}>For the field. For the farmer. For the formula. </span>)}</div></div>
     </section>
@@ -112,16 +112,16 @@ export default function Landing() {
       <div className="lp-shot lp-mock" data-reveal>
         <div className="lp-shot-bar"><i/><i/><i/><span>crossroad · playground</span></div>
         <div className="mock-body">
-          <div className="mock-verdict"><span className="mock-big"><ArrowUpRight size={22}/></span><div><b>You got paid.</b><p>0.0017 SOL is in your wallet, and 0.0083 SOL more may follow.</p></div></div>
+          <div className="mock-verdict"><span className="mock-big"><ArrowUpRight size={22}/></span><div><b>You got paid.</b><p>0.0030 SOL is in your wallet. Nothing waits.</p></div></div>
           <ol className="mock-chain">
-            <li className="mock-box"><small>1 · Rain this week</small><b>34 mm · 35 mm</b><span>reports differ · field from space: looks bad</span></li>
+            <li className="mock-box"><small>1 · Rain this week</small><b>33 mm · 15 mm · 31 mm</b><span>reports differ</span></li>
             <li className="mock-arrow" aria-hidden="true"><ArrowRight size={20}/></li>
-            <li className="mock-box mock-win"><small>2 · Paid to you now</small><b>0.0017 SOL</b><span>already in your wallet</span></li>
+            <li className="mock-box mock-win"><small>2 · Paid to you now</small><b>0.0030 SOL</b><span>already in your wallet</span></li>
             <li className="mock-arrow" aria-hidden="true"><ArrowRight size={20}/></li>
-            <li className="mock-box mock-wait"><small>3 · Still waiting</small><b>0.0083 SOL</b><span>a person must decide</span></li>
+            <li className="mock-box"><small>3 · How it was decided</small><b>Middle reading</b><span>the odd one out was ignored</span></li>
           </ol>
-          <div className="mock-decide"><p>What should happen to the 0.0083 SOL that is waiting?</p><div><span className="mock-btn mock-yes"><ArrowUpRight size={14}/> Pay it to me</span><span className="mock-btn mock-no"><XIcon size={14}/> Don't pay it</span></div></div>
-          <div className="mock-why"><b>Why part of it waits</b><p>The weather reports say one thing, the satellite picture of your field says another. We paid what all of them agree on. The rest waits until someone checks the picture.</p></div>
+          
+          <div className="mock-why"><b>Why the sources disagreed</b><p>Two forecasts say the week was a bit dry, one says very dry. The app paid by the middle one, so the odd one out was ignored and nothing waits.</p></div>
         </div>
         <div className="lp-shot-foot"><span>The real Playground, one evaluation later.</span><a href="#playground?product=crop_drought">Open it yourself</a></div>
       </div>
@@ -145,7 +145,7 @@ export default function Landing() {
         <div><b data-count="30">0</b><span>minutes late before the payout starts</span></div>
         <div><b data-count="180">0</b><span>minutes late, and the full cover is paid</span></div>
         <div><b data-count="100" data-suffix="%">0%</b><span>of payouts settled as real transactions on Solana</span></div>
-        <p className="lp-foot-note">When the feeds agree, the formula pays in full. When they disagree, the floor is paid now and only the difference waits for review. The delay feeds are simulated for now; the settlement is real.</p>
+        <p className="lp-foot-note">When the feeds agree, the formula pays in full. When they disagree, the middle reading decides. Nothing waits. The delay feeds are simulated for now; the settlement is real.</p>
         <a className="lp-pill lp-pill-solid" href="#playground?product=travel_delay" style={{ alignSelf: 'flex-start', marginTop: 22 }}>Open the playground</a>
       </div>
       <div className="lp-marquee" aria-hidden="true"><div className="lp-marquee-track">{Array.from({ length: 4 }, (_, i) => <span key={i}>For the traveller. For the delay. For the formula. </span>)}</div></div>
@@ -160,9 +160,9 @@ export default function Landing() {
         <div className="lp-cell lp-c2 lp-r2" data-reveal style={{ ['--d' as string]: '120ms' }}><span className="lp-big">sets the<br/>amount.</span></div>
         <div className="lp-cell lp-c3 lp-r2 lp-span2" data-reveal style={{ ['--d' as string]: '200ms' }}><span className="lp-big">The AI only<br/>explains why.</span></div>
         <div className="lp-cell lp-c1 lp-r3 lp-proof" data-reveal style={{ ['--d' as string]: '260ms' }}><small>The rule</small><code>payout = (trigger − rain) ÷ (trigger − exit)</code><p>Same readings in, same amount out. Anyone can recompute it.</p></div>
-        <div className="lp-cell lp-c2 lp-r3 lp-proof" data-reveal style={{ ['--d' as string]: '290ms' }}><small>A real devnet run</small><p className="lp-proof-num">30.6 mm <i>vs</i> 23.7 mm</p><p>Two forecasts for Warsaw disagreed. The part both agree on was paid at once; the rest was held.</p></div>
-        <div className="lp-cell lp-c3 lp-r3 lp-proof" data-reveal style={{ ['--d' as string]: '305ms' }}><small>What the AI wrote</small><blockquote>“The satellite NDVI reading is 0.20, which maps to a payout ratio of 1.000, indicating total loss and conflicting sharply with the rainfall data.”</blockquote><p>Escalated to a person. No money moved on its word.</p></div>
-        <div className="lp-cell lp-c4 lp-r3" data-reveal style={{ ['--d' as string]: '320ms' }}><p>When two sources disagree, an AI watchdog writes down what it sees for a human reviewer. It never sets or changes an amount, releases the escrow or sends a payment. Only a person can.</p></div>
+        <div className="lp-cell lp-c2 lp-r3 lp-proof" data-reveal style={{ ['--d' as string]: '290ms' }}><small>A real devnet run</small><p className="lp-proof-num">30.6 <i>·</i> 23.7 <i>·</i> 22.5 mm</p><p>Three forecasts for Warsaw disagreed. The middle one, 23.7 mm, set the payout and it was sent at once.</p></div>
+        <div className="lp-cell lp-c3 lp-r3 lp-proof" data-reveal style={{ ['--d' as string]: '305ms' }}><small>What the AI wrote</small><blockquote>“The system used the middle value (23.7 mm) to determine the payout, which was sent automatically.”</blockquote><p>It explains. It never sets or moves an amount.</p></div>
+        <div className="lp-cell lp-c4 lp-r3" data-reveal style={{ ['--d' as string]: '320ms' }}><p>Every payout comes with a plain explanation written by an AI. When sources disagree, it also flags anything that looks like a fault. It never sets, changes or sends an amount: the middle reading does.</p></div>
       </div>
     </section>
 
@@ -170,7 +170,7 @@ export default function Landing() {
     <section className="lp-close" data-theme="close">
       <div className="lp-close-inner" data-reveal>
         <h2>Be first to cover<br/>a field this way.</h2>
-        <p>Create a policy, force a disagreement, and watch the floor pay while the dispute waits.</p>
+        <p>Create a policy, make one source disagree, and watch the middle reading pay at once.</p>
         <div className="lp-actions"><a className="lp-pill lp-pill-light" href="#playground">Open the playground</a><a className="lp-pill" href={explorer('address', WALLET)} target="_blank" rel="noreferrer">Watch the wallet <ArrowUpRight size={14}/></a></div>
       </div>
       <div className="lp-close-foot"><Brand size={20}/><span>Parametric cover. Deterministic payouts.</span><span className="lp-sol"><svg className="sol-mark" viewBox="0 0 24 20" aria-hidden="true"><path d="M4.6 0h19.4l-4.6 4.8H0z"/><path d="M4.6 7.6h19.4L19.4 12.4H0z"/><path d="M4.6 15.2h19.4L19.4 20H0z"/></svg> Hackathon prototype · Solana devnet</span></div>

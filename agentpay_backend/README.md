@@ -3,10 +3,11 @@
 *Formerly Agent Pay.*
 
 A parametric rainfall insurance prototype on **Solana devnet**. A fixed
-formula decides every payout. Two independent rainfall sources are read for
-each policy; when they disagree, the worst-case amount is paid **immediately
-on-chain** and only the disputed delta is escrowed while an AI watchdog
-explains what it sees. The AI can explain and escalate. It can never pay.
+formula decides every payout. Three independent rainfall models are read for
+each policy and the **median** of their payout ratios is paid **immediately
+on-chain**, in one transaction: nothing is held and nobody approves it. An AI
+writes a plain explanation of every payout and flags suspicious disagreements
+for audit. It can never pay, change or stop a payment.
 
 ## Run it
 
@@ -34,8 +35,8 @@ A provider that fails falls through to the next, so the demo never depends on a
 model being reachable. All three get the same context (built from the policy's
 catalog entry, so the wording matches the product: rainfall in mm, delay in
 minutes, ...). Whatever the provider, a deterministic guardrail escalates any
-spread of 0.40 or more and makes sure the text states the real floor (a floor
-of 0 is never described as paid). The AI never sets or moves an amount. The
+spread of 0.40 or more for audit and replaces every money statement in the
+text with the real one (what the median paid). The AI never sets or moves an amount. The
 startup banner prints which provider is active.
 
 On first start the app generates two devnet wallets next to `app/`:
@@ -56,25 +57,28 @@ payout_ratio  = clamp((trigger_mm - observed_mm) / (trigger_mm - exit_mm), 0, 1)
 payout_amount = sum_insured_sol * payout_ratio
 ```
 
-With several readings, the wettest one gives the **floor** ratio and the
-driest the **ceiling**. Sources "disagree" when ceiling - floor > 0.10.
+With several readings the payout ratio is their **median**
+(`formula.settled_ratio`). Sources "disagree" when highest - lowest > 0.10.
 
-## Pay the floor, escrow the delta
+## Pay the median, once
 
-1. `POST /policy/{id}/evaluate` pulls two Open-Meteo products for the
-   policy's lat/lon and window (`best_match` and `ecmwf_ifs025`; both free,
-   keyless, same provider). A failing source is dropped, never read as 0 mm.
-2. The floor amount is sent on-chain right away, dispute or not. A poisoned
-   feed can only ever freeze the disputed slice, not the whole payout.
-3. If the sources disagree, `decision.investigate()` (the watchdog) explains
-   why and recommends `auto_resolve` or `escalate`. A spread of 0.40 or more
-   is always escalated. The delta goes into `escrow_ledger.json`.
-4. A human calls `POST /policy/{id}/resolve?release=true|false`. Release is a
-   second real devnet transfer; void moves nothing. If the watchdog said
-   auto-resolve, calling `/evaluate` again settles the delta from fresh
-   readings when they agree (partial release if they land in between).
+1. `POST /policy/{id}/evaluate` pulls three Open-Meteo models for the
+   policy's lat/lon and window (`best_match`, `ecmwf_ifs025`, `icon_seamless`;
+   free, keyless, same provider; override with `RAIN_MODEL_A/B/C`). A failing
+   source is dropped, never read as 0 mm.
+2. The median amount is sent on-chain right away, dispute or not, and the
+   policy is settled. One poisoned feed cannot move the median on its own.
+3. Every evaluation gets a plain explanation (`explanation` in the response):
+   Groq when the sources agree, the watchdog's `plain` text when they disagree,
+   rule-based sentences when no provider is available.
+4. If the sources disagree, `decision.investigate()` (the watchdog) also writes
+   a reviewer report and flags `escalate` for audit; it never holds money.
 
-### On-chain escrow vault (deployed) and the JSON fallback
+Policies evaluated before median settlement may still hold an escrow; for those
+`POST /policy/{id}/resolve?release=true|false` and the follow-up cycle below
+still work.
+
+### On-chain escrow vault (legacy: not used by new policies)
 
 With `AGENT_PAY_ONCHAIN_ESCROW=1` the disputed delta is not just a note in a
 file: it is locked in a **program-controlled PDA** and can only leave through

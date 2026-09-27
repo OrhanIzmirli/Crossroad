@@ -85,3 +85,10 @@ def test_ndvi_vote_maps_with_its_own_thresholds():
     assert floor == pytest.approx(0.2)
     assert ceiling == 1.0
     assert sources_disagree(floor, ceiling)
+
+
+def test_settled_ratio_is_the_median_so_one_outlier_cannot_decide():
+    from app.formula import settled_ratio
+    assert settled_ratio([0.25, 0.85, 0.30]) == 0.30          # the 0.85 outlier is ignored
+    assert settled_ratio([0.2, 0.8]) == 0.5                   # two sources: their average
+    assert settled_ratio([1.4, -0.2, 0.5]) == 0.5             # clamped to 0..1 first

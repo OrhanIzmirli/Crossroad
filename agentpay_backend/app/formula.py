@@ -75,6 +75,16 @@ def floor_ceiling_from_ratios(ratios: Iterable[float]) -> tuple[float, float]:
     return min(rs), max(rs)
 
 
+def settled_ratio(ratios: Iterable[float]) -> float:
+    """The ratio that is actually paid: the median of all sources. One broken or manipulated source cannot move it
+    on its own when there are three or more; with two sources it is their average."""
+    rs = sorted(clamp(r) for r in ratios)
+    if not rs:
+        raise ValueError("at least one ratio is required")
+    mid = len(rs) // 2
+    return rs[mid] if len(rs) % 2 else (rs[mid - 1] + rs[mid]) / 2
+
+
 def sources_disagree(floor_ratio: float, ceiling_ratio: float, tolerance: float = DEFAULT_TOLERANCE) -> bool:
     """True when the spread between the best and worst case payout ratio
     is wider than we're willing to settle on without a second look."""

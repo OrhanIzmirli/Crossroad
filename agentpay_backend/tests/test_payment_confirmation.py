@@ -102,7 +102,7 @@ def _policy(client):
     return r.json()["id"]
 
 
-SIM = {"simulate": [{"mm": 30, "label": "A"}, {"mm": 12, "label": "B"}]}   # disagreement: floor > 0 and an escrow
+SIM = {"simulate": [{"mm": 30, "label": "A"}, {"mm": 12, "label": "B"}]}   # disagreement: ratios 0.333 / 0.933, median 0.633
 
 
 def test_unknown_confirmation_returns_pending_and_never_sends_twice(api):
@@ -128,8 +128,8 @@ def test_late_confirmation_completes_the_evaluation_without_a_second_payment(api
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["floor_tx_signature"] == "sig1" and len(sends) == 1
-    assert body["dispute_status"] in ("escalated", "investigating") and body["escrow"]["status"] == "pending"
-    assert body["escrow_amount_sol"] == pytest.approx(0.006) and "no second payment was sent" in body["note"]
+    assert body["dispute_status"] == "resolved" and body["escrow"] is None and body["escrow_amount_sol"] == 0
+    assert body["paid_amount_sol"] == pytest.approx(0.00633333, rel=1e-3) and "no second payment was sent" in body["note"]
 
 
 def test_expired_pending_payment_allows_a_fresh_attempt(api):
@@ -138,4 +138,4 @@ def test_expired_pending_payment_allows_a_fresh_attempt(api):
     assert client.post(f"/policy/{pid}/evaluate", json=SIM).status_code == 202
     state["check"] = "expired"                            # can never land: retrying cannot double pay
     assert client.post(f"/policy/{pid}/evaluate", json=SIM).status_code == 202
-    assert len(sends) == 2 and [s for s in sends] == [pytest.approx(0.00333333, rel=1e-3)] * 2
+    assert len(sends) == 2 and [s for s in sends] == [pytest.approx(0.00633333, rel=1e-3)] * 2

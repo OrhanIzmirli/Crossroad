@@ -101,28 +101,29 @@ def test_lookup_failure_never_raises(monkeypatch):
     assert reading is None and "unavailable" in note
 
 
-# --- watchdog explanation must match the real floor, incl. status-implied sources -------------
+# --- watchdog explanation must state the real payment, incl. status-implied sources -------------
 from app.decision import DisputeContext, investigate_heuristic
+from app.formula import settled_ratio
 
 
 def _ctx(readings, floor, ceiling):
     p = _policy("event_weather_cancel")
     for r in readings:
         r.payout_ratio = r.payout_ratio if r.payout_ratio is not None else payout_ratio(r.observed_mm, p.trigger_mm, p.exit_mm)
-    return DisputeContext(p, readings, floor, ceiling)
+    return DisputeContext(p, readings, floor, ceiling, settled_ratio(r.payout_ratio for r in readings))
 
 
-def test_status_vs_weather_explanation_states_zero_floor():
+def test_status_vs_weather_explanation_states_what_was_paid():
     w = [SourceReading("a", 0.0, True), SourceReading("b", 0.0, True)]
-    rep = investigate_heuristic(_ctx(w + [status_reading("cancelled", "x", True)], 0.0, 1.0))
+    rep = investigate_heuristic(_ctx(w + [status_reading("cancelled", "x", True)], 0.0, 1.0))   # median of 0, 0, 1 is 0
     assert rep.recommendation == "escalate" and rep.suspected_cause == "event status vs measurement conflict"
-    assert "floor is 0" in rep.summary and "nothing has been paid" in rep.summary
-    assert "floor has been paid" not in rep.summary and "ordinary variance" not in rep.summary
+    assert rep.summary.endswith("The middle reading means nothing is owed, so nothing was paid.")
+    assert "floor" not in rep.summary.lower() and "ordinary variance" not in rep.summary
 
 
-def test_positive_floor_explanation_states_the_amount():
+def test_positive_payment_explanation_states_the_amount():
     rep = investigate_heuristic(_ctx([SourceReading("a", 20.0, True), SourceReading("b", 22.0, True)], 0.75, 0.85))
-    assert "paid immediately" in rep.summary and "0.0075 SOL" in rep.summary
+    assert rep.summary.endswith("0.0080 SOL (the middle reading, ratio 0.800) was paid in full at once; nothing is held back.")
 
 
 # --- Groq provider (network mocked) ------------------------------------------------------------
@@ -161,7 +162,7 @@ def test_groq_uses_same_prompt_and_real_amounts(monkeypatch):
     assert seen["body"]["model"] == "openai/gpt-oss-120b"
     assert seen["body"]["messages"][0]["content"] == dec.system_prompt(_event_ctx())
     user = seen["body"]["messages"][1]["content"]
-    assert _event_ctx().describe() in user and "pays 0.0000 SOL now" in user and "nothing is paid at the floor" in user
+    assert _event_ctx().describe() in user and "Payout = the median ratio 0.000 = 0.0000 SOL, paid in full at once; nothing is held." in user
     assert rep.ai_used and rep.model.startswith("groq:")
 
 
@@ -171,24 +172,22 @@ def test_precedence_and_fallbacks(monkeypatch):
     async def groq(ctx): calls.append("groq"); raise TimeoutError()
     async def claude(ctx): calls.append("claude"); return "CLAUDE"
     monkeypatch.setattr(dec, "investigate_with_groq", groq); monkeypatch.setattr(dec, "investigate_with_llm", claude)
-    run = lambda: asyncio.run(dec.investigate(p, readings, 0.0, 1.0))
+    run = lambda: asyncio.run(dec.investigate(p, readings, 0.0, 1.0, 0.0))
     monkeypatch.setattr(dec, "_secret", lambda n: "k" if n == "GROQ_API_KEY" else "")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
     assert run() == "CLAUDE" and calls == ["groq", "claude"]          # Groq first, then Claude when Groq fails
     monkeypatch.delenv("ANTHROPIC_API_KEY"); calls.clear()
     rep = run()                                                        # Groq fails, no Claude -> rule-based
-    assert rep.model == "heuristic" and "groq: TimeoutError" in rep.evidence[-1] and "floor is 0" in rep.summary
+    assert rep.model == "heuristic" and "groq: TimeoutError" in rep.evidence[-1] and "nothing was paid" in rep.summary
     monkeypatch.setattr(dec, "_secret", lambda n: ""); calls.clear()
     assert run().model == "heuristic" and calls == []                  # no keys at all -> rule-based, no calls
 
 
-def test_guardrail_appends_real_floor_statement_when_provider_omits_it():
+def test_guardrail_keeps_the_explanation_and_appends_the_real_payment():
     from app.models import DisputeReport
     ctx = _event_ctx()
     rep = dec._guardrail(DisputeReport(summary="Weather says dry, status says cancelled.", suspected_cause="c", evidence=[], recommendation="escalate", ai_used=True, model="m"), ctx)
-    assert rep.summary.endswith("The floor is 0, so nothing has been paid yet.")
-    ok = dec._guardrail(DisputeReport(summary="The floor is 0.", suspected_cause="c", evidence=[], recommendation="escalate", ai_used=True, model="m"), ctx)
-    assert ok.summary == "The floor is 0."   # already mentions it: untouched
+    assert rep.summary == "Weather says dry, status says cancelled. The middle reading means nothing is owed, so nothing was paid."
 
 
 
@@ -201,7 +200,7 @@ def _pctx(ptype, values, floor_ratio=None, ceiling_ratio=None):
     for r in rs:
         r.payout_ratio = payout_ratio(r.observed_mm, p.trigger_mm, p.exit_mm)
     ratios = [r.payout_ratio for r in rs]
-    return DisputeContext(p, rs, min(ratios), max(ratios))
+    return DisputeContext(p, rs, min(ratios), max(ratios), settled_ratio(ratios))
 
 
 @pytest.mark.parametrize("ptype,values", [("crop_excess_rain", [90, 130]), ("travel_delay", [20, 150]),
@@ -212,7 +211,7 @@ def test_heuristic_never_calls_a_guardrail_escalation_ordinary_variance(ptype, v
     rep = investigate_heuristic(ctx)
     assert rep.recommendation == "escalate"
     assert "ordinary variance" not in rep.summary and rep.suspected_cause != "model spread"
-    assert ctx.floor_clause() in rep.summary or "floor" in rep.summary.lower()
+    assert rep.summary.endswith(ctx.paid_clause() + ".")
 
 
 def test_heuristic_moderate_spread_is_ordinary_variance_and_consistent():
@@ -243,21 +242,20 @@ def test_crop_prompt_mentions_satellite_only_when_a_satellite_reading_exists():
     assert "NDVI" in dec.system_prompt(ctx2) and "Satellite mapping" in ctx2.describe() and "rainfall" in dec.system_prompt(ctx2).lower()
 
 
-def test_guardrail_corrects_a_floor_paid_claim_next_to_a_zero_floor():
+def test_guardrail_drops_every_money_claim_the_model_makes():
     from app.models import DisputeReport
-    ctx = _event_ctx()                                            # floor is 0
-    rep = dec._guardrail(DisputeReport(summary="The floor payout is 0 SOL (already paid) and 0.01 SOL is held.", suspected_cause="c",
-                                       evidence=["Floor ratio 0.000 (0 SOL paid now)", "The floor was already paid on-chain", "Spread 1.0"], recommendation="escalate", ai_used=True, model="m"), ctx)
-    assert rep.summary.endswith("The floor is 0, so nothing has been paid yet.")
-    assert rep.evidence[0] == "Floor ratio 0.000 (0 SOL paid now)"          # truthful line untouched
-    assert rep.evidence[1] == "Floor: ratio 0.000 = 0.0000 SOL (nothing paid yet)" and rep.evidence[2] == "Spread 1.0"
+    ctx = _event_ctx()                                            # median 0: nothing paid
+    rep = dec._guardrail(DisputeReport(summary="Sources disagree strongly. The floor payout is 0 SOL (already paid) and 0.01 SOL is held.", suspected_cause="c",
+                                       evidence=["Floor ratio 0.000 (0 SOL paid now)", "The rest sits in escrow", "Spread 1.0"], recommendation="escalate", ai_used=True, model="m"), ctx)
+    assert rep.summary == "Sources disagree strongly. The middle reading means nothing is owed, so nothing was paid."
+    assert rep.evidence == ["Spread 1.0", "Paid: middle ratio 0.000 = 0.0000 SOL, in full, at once"]
 
 
-def test_guardrail_corrects_nothing_paid_claim_next_to_a_positive_floor():
+def test_guardrail_replaces_a_wrong_payment_claim_with_the_real_one():
     from app.models import DisputeReport
-    ctx = _pctx("crop_drought", [30, 12])                          # floor 0.333 -> 0.0033 SOL, paid at once
+    ctx = _pctx("crop_drought", [30, 12])                          # ratios 0.333 / 0.933 -> median 0.633 -> 0.0063 SOL
     rep = dec._guardrail(DisputeReport(summary="The floor is 0, so nothing has been paid.", suspected_cause="c", evidence=[], recommendation="escalate", ai_used=True, model="m"), ctx)
-    assert rep.summary.endswith("The floor (0.333, 0.0033 SOL) is paid immediately.")
+    assert rep.summary == "0.0063 SOL (the middle reading, ratio 0.633) was paid in full at once; nothing is held back."
 
 
 def test_guardrail_handles_unicode_spaces_from_models():
@@ -265,17 +263,12 @@ def test_guardrail_handles_unicode_spaces_from_models():
     ctx = _event_ctx()
     rep = dec._guardrail(DisputeReport(summary="Floor payout is 0\u202fSOL (already paid).", suspected_cause="c",
                                        evidence=["Floor ratio 0.000 (0\u202fSOL paid now)"], recommendation="escalate", ai_used=True, model="m"), ctx)
-    assert rep.summary.endswith("nothing has been paid yet.") and rep.evidence == ["Floor ratio 0.000 (0\u202fSOL paid now)"]
+    assert rep.summary == "The middle reading means nothing is owed, so nothing was paid." and rep.evidence[-1].startswith("Paid: middle ratio 0.000")
 
 
-def test_guardrail_does_not_mistake_a_small_positive_amount_for_zero():
-    from app.models import DisputeReport
-    ctx = _pctx("crop_excess_rain", [90, 130])                     # floor 0.167 -> 0.0017 SOL
-    good = "The floor payout of 0.0017 SOL has already been sent, but the delta remains in escrow."
-    rep = dec._guardrail(DisputeReport(summary=good, suspected_cause="c", evidence=["Floor ratio 0.167 (0.0017 SOL)"], recommendation="escalate", ai_used=True, model="m"), ctx)
-    assert rep.summary == good and rep.evidence == ["Floor ratio 0.167 (0.0017 SOL)"]      # untouched, nothing appended
-    bad = dec._guardrail(DisputeReport(summary="The floor payout is 0.000 SOL.", suspected_cause="c", evidence=[], recommendation="escalate", ai_used=True, model="m"), ctx)
-    assert bad.summary.endswith("is paid immediately.")
+def test_old_escrow_cycles_still_describe_the_held_amount():
+    ctx = DisputeContext(_policy("crop_drought"), [], 0.25, 0.85)     # no paid ratio: a pre-median escrow cycle
+    assert ctx.paid_clause() == "0.0025 SOL was paid at once; the rest is still held from an earlier cycle"
 
 
 def test_every_product_has_a_known_colour_theme():

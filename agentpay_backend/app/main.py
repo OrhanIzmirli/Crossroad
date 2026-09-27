@@ -26,6 +26,7 @@ API contract is what the frontend builds against (Swagger at /docs).
 """
 
 import asyncio
+import httpx
 import os
 import time
 from dataclasses import asdict
@@ -41,14 +42,15 @@ from app.data_sources import (
     AGROMONITORING_API_KEY,
     RAIN_MODEL_A,
     RAIN_MODEL_B,
+    RAIN_MODEL_C,
     default_field_polygon,
     fetch_rainfall_readings,
     get_reading_source_satellite,
     simulate_reading,
     simulate_satellite_reading,
 )
-from app.decision import active_provider, investigate
-from app.formula import DEFAULT_TOLERANCE, escrow_delta, floor_ceiling_from_ratios, payout_amount, payout_ratio, sources_disagree
+from app.decision import DisputeContext, active_provider, bottom_line, explain_settlement, investigate, settlement_fallback
+from app.formula import DEFAULT_TOLERANCE, floor_ceiling_from_ratios, payout_amount, payout_ratio, settled_ratio, sources_disagree
 from app.models import DisputeStatus, EvaluationResult, Policy, ProductType, SourceReading
 from app.satellite_image import cache_images, crop_to_field, fetch_upstream, get_cached, render_simulated_ndvi, tile_url
 from app.payment import (
@@ -324,6 +326,24 @@ def root():
     return {"status": "ok", "service": "Crossroad backend", "mode": "parametric-insurance"}
 
 
+# SOL/USD for the dollar labels in the UI. Cached for everyone so a busy demo never hits CoinGecko's rate limit;
+# when CoinGecko fails, the last known price keeps being served.
+_sol_price: dict = {"usd": None, "fetched_at": 0.0}
+
+
+@app.get("/sol-price")
+async def sol_price():
+    if _sol_price["usd"] is None or time.time() - _sol_price["fetched_at"] > 300:
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                r = await client.get("https://api.coingecko.com/api/v3/simple/price", params={"ids": "solana", "vs_currencies": "usd"})
+            r.raise_for_status()
+            _sol_price.update(usd=float(r.json()["solana"]["usd"]), fetched_at=time.time())
+        except Exception as e:  # noqa: BLE001 - rate limit / network: keep the last known price
+            print(f"[price] SOL/USD refresh failed ({e!r}); serving {_sol_price['usd']}")
+    return {"usd": _sol_price["usd"], "fetched_at": _sol_price["fetched_at"] or None}
+
+
 @app.get("/venues")
 async def venues(q: str = Query("", max_length=80)):
     return {"venues": await search_venues(q)}
@@ -447,7 +467,7 @@ def list_products():
     """One settlement engine, pluggable across verticals: the catalog the
     Playground presets are built from."""
     return {"formula": "payout_ratio = clamp((trigger - observed) / (trigger - exit), 0, 1)", "products": catalog(), "max_sum_insured_sol": MAX_SUM_INSURED_SOL, "premium_rate": PREMIUM_RATE, "insurer_wallet": AGENT_PUBLIC_KEY, "satellite_live": bool(AGROMONITORING_API_KEY),
-            "rain_models": {"a": RAIN_MODEL_A, "b": RAIN_MODEL_B}}
+            "rain_models": {"a": RAIN_MODEL_A, "b": RAIN_MODEL_B, "c": RAIN_MODEL_C}}
 
 
 @app.get("/policy/{policy_id}/satellite/image", responses={200: {"content": {"image/png": {}}}, 404: {"description": "No satellite evidence for this policy"}})
@@ -491,29 +511,26 @@ def get_policy_route(policy_id: str):
     return _policy_response(policy_id)
 
 
-async def _finish_fresh(policy: Policy, readings: list[SourceReading], note: str | None, floor_tx: str | None,
-                        floor_ratio: float, ceiling_ratio: float, floor_amount: float, ceiling_amount: float,
-                        delta: float, disagree: bool, start: float) -> dict:
-    """Everything after the floor payment of a fresh cycle: watchdog + escrow the delta, proof, persistence.
-    Split out so an evaluation whose floor payment was confirmed LATER can be completed from stored numbers."""
+async def _finish_fresh(policy: Policy, readings: list[SourceReading], note: str | None, paid_tx: str | None,
+                        floor_ratio: float, ceiling_ratio: float, settled: float, paid_amount: float,
+                        disagree: bool, start: float) -> dict:
+    """Everything after the (single) payment of a fresh cycle: explanation, proof, persistence. Split out so an
+    evaluation whose payment was confirmed LATER can be completed from stored numbers."""
     policy_id = policy.id
     policy.pending_payment = None
-    # 4. disagreement? watchdog + escrow the delta ------------------------
+    policy.settled = True   # the median settles the policy: nothing is held, nobody has to approve anything
     dispute = None
-    escrow = None
-    if disagree and delta > 0:
-        report = await investigate(policy, readings, floor_ratio, ceiling_ratio)
+    if disagree:
+        report = await investigate(policy, readings, floor_ratio, ceiling_ratio, settled)
         dispute = asdict(report)
-        status = DisputeStatus.ESCALATED if report.recommendation == "escalate" else DisputeStatus.INVESTIGATING
-        escrow = open_escrow(
-            policy_id,
-            policy.payee_pubkey,
-            delta,
-            reason=f"{report.suspected_cause}: floor {floor_ratio:.3f} vs ceiling {ceiling_ratio:.3f} (spread {ceiling_ratio - floor_ratio:.3f})",
-        )
+        status = DisputeStatus.RESOLVED
+        ctx = DisputeContext(policy, readings, floor_ratio, ceiling_ratio, settled)
+        explanation = ({"plain": report.plain, "ai_used": report.ai_used, "model": report.model} if report.plain else
+                       {"plain": settlement_fallback(ctx, disagree=True), "ai_used": False, "model": "rule-based"})
+        explanation["bottom_line"] = bottom_line(ctx)
     else:
+        explanation = await explain_settlement(policy, readings, floor_ratio, ceiling_ratio, settled)
         status = DisputeStatus.NONE
-        policy.settled = True
         if len(readings) == 1:
             note = (note + " " if note else "") + "Only one source responded; paid per formula without cross-checking."
 
@@ -522,18 +539,20 @@ async def _finish_fresh(policy: Policy, readings: list[SourceReading], note: str
         readings=readings,
         payout_ratio_floor=floor_ratio,
         payout_ratio_ceiling=ceiling_ratio,
-        floor_amount_sol=floor_amount,
-        ceiling_amount_sol=ceiling_amount,
-        escrow_amount_sol=delta if escrow else 0.0,
-        floor_tx_signature=floor_tx,
+        floor_amount_sol=payout_amount(policy.sum_insured_sol, floor_ratio),
+        ceiling_amount_sol=payout_amount(policy.sum_insured_sol, ceiling_ratio),
+        escrow_amount_sol=0.0,
+        floor_tx_signature=paid_tx,
         dispute_status=status,
         dispute=dispute,
-        escrow=escrow,
+        escrow=None,
         elapsed_ms=round((time.time() - start) * 1000, 1),
+        payout_ratio_settled=settled,
+        paid_amount_sol=paid_amount,
     )
-    proof = build_proof(policy, readings, floor_ratio, ceiling_ratio, dispute)
-    print(f"[proof] policy {policy_id} inputs_hash={proof['inputs_hash']} floor={floor_ratio:.4f} ceiling={ceiling_ratio:.4f} ai={proof['ai_involvement']}")
-    payload = _evaluation_to_dict(result, note=note, cycle="fresh", proof=proof)
+    proof = build_proof(policy, readings, floor_ratio, ceiling_ratio, dispute, settled)
+    print(f"[proof] policy {policy_id} inputs_hash={proof['inputs_hash']} lowest={floor_ratio:.4f} highest={ceiling_ratio:.4f} paid={settled:.4f} ai={proof['ai_involvement']}")
+    payload = _evaluation_to_dict(result, note=note, cycle="fresh", proof=proof, explanation=explanation)
     save_policy(policy, last_evaluation=payload)
     return payload
 
@@ -577,10 +596,11 @@ async def evaluate_policy(policy_id: str, req: EvaluateRequest | None = None):
     if pp:
         state = await check_signature(pp["signature"], pp.get("last_valid_block_height"), attempts=3)
         if state == "confirmed":
-            print(f"[main] pending floor payment {pp['signature']} for {policy_id} is now confirmed; completing the evaluation without a second payment")
-            note = ("Floor payment confirmed after an earlier unconfirmed submission; no second payment was sent. " + (pp.get("note") or "")).strip()
+            print(f"[main] pending payment {pp['signature']} for {policy_id} is now confirmed; completing the evaluation without a second payment")
+            note = ("Payment confirmed after an earlier unconfirmed submission; no second payment was sent. " + (pp.get("note") or "")).strip()
             return await _finish_fresh(policy, [SourceReading(**d) for d in pp["readings"]], note, pp["signature"], pp["floor_ratio"],
-                                       pp["ceiling_ratio"], pp["floor_amount"], pp["ceiling_amount"], pp["delta"], pp["disagree"], start)
+                                       pp["ceiling_ratio"], pp.get("settled_ratio", pp["floor_ratio"]), pp.get("paid_amount", pp["floor_amount"]),
+                                       pp["disagree"], start)
         if state == "unknown":
             return _pending_response(policy, pp["signature"], pp["amount_sol"], pp["floor_ratio"], pp["ceiling_ratio"])
         print(f"[main] pending floor payment {pp['signature']} for {policy_id} is {state}: it can never land, evaluating afresh")
@@ -599,10 +619,10 @@ async def evaluate_policy(policy_id: str, req: EvaluateRequest | None = None):
     # 2. formula (the only thing that decides amounts) ---------------------
     # Readings may be in different units (mm, NDVI); each was mapped to a
     # payout ratio in _collect_readings, so floor/ceiling are taken over ratios.
-    floor_ratio, ceiling_ratio = floor_ceiling_from_ratios([r.payout_ratio or 0.0 for r in readings])
-    floor_amount = payout_amount(policy.sum_insured_sol, floor_ratio)
-    ceiling_amount = payout_amount(policy.sum_insured_sol, ceiling_ratio)
-    delta = escrow_delta(policy.sum_insured_sol, floor_ratio, ceiling_ratio)
+    ratios = [r.payout_ratio or 0.0 for r in readings]
+    floor_ratio, ceiling_ratio = floor_ceiling_from_ratios(ratios)
+    settled = settled_ratio(ratios)   # the median: what is actually paid
+    paid_amount = payout_amount(policy.sum_insured_sol, settled)
     disagree = len(readings) > 1 and sources_disagree(floor_ratio, ceiling_ratio)
     note = " ".join(warnings) or None
 
@@ -667,38 +687,38 @@ async def evaluate_policy(policy_id: str, req: EvaluateRequest | None = None):
     # ---------------------------------------------------------------------
     # Fresh cycle.
     # ---------------------------------------------------------------------
-    # 3. pay the floor NOW - whether or not the sources agree -------------
-    floor_tx = None
-    if floor_amount > 0:
+    # 3. pay the median NOW, in full - whether or not the sources agree ----
+    paid_tx = None
+    if paid_amount > 0:
         try:
-            payment = await send_payment(floor_amount, policy.payee_pubkey)
+            payment = await send_payment(paid_amount, policy.payee_pubkey)
         except PaymentPending as p:
             policy.pending_payment = {
-                "signature": p.signature, "amount_sol": floor_amount, "last_valid_block_height": p.last_valid_block_height,
+                "signature": p.signature, "amount_sol": paid_amount, "last_valid_block_height": p.last_valid_block_height,
                 "readings": [asdict(r) for r in readings], "note": note, "floor_ratio": floor_ratio, "ceiling_ratio": ceiling_ratio,
-                "floor_amount": floor_amount, "ceiling_amount": ceiling_amount, "delta": delta, "disagree": disagree, "created_at": time.time(),
+                "settled_ratio": settled, "paid_amount": paid_amount,
+                "floor_amount": paid_amount, "disagree": disagree, "created_at": time.time(),
             }
             save_policy(policy)
-            print(f"[main] floor payment for {policy_id} unconfirmed ({p.signature}); stored as pending_payment, not retrying")
-            return _pending_response(policy, p.signature, floor_amount, floor_ratio, ceiling_ratio)
+            print(f"[main] payment for {policy_id} unconfirmed ({p.signature}); stored as pending_payment, not retrying")
+            return _pending_response(policy, p.signature, paid_amount, floor_ratio, ceiling_ratio)
         except Exception as e:  # noqa: BLE001 - RPC down, no funds, bad blockhash...
-            print(f"[main] floor payment failed for {policy_id}: {e!r}")
+            print(f"[main] payment failed for {policy_id}: {e!r}")
             return JSONResponse(
                 status_code=502,
                 content={
                     "error": "payment_failed",
                     "detail": str(e),
                     "policy_id": policy_id,
-                    "floor_amount_sol": floor_amount,
-                    "payout_ratio_floor": floor_ratio,
-                    "payout_ratio_ceiling": ceiling_ratio,
+                    "paid_amount_sol": paid_amount,
+                    "payout_ratio_settled": settled,
                 },
             )
-        floor_tx = payment.tx_signature
+        paid_tx = payment.tx_signature
     else:
-        note = ((note + " ") if note else "") + "Floor payout is 0 SOL (least-loss reading at/beyond trigger) - nothing sent on-chain for the floor."
+        note = ((note + " ") if note else "") + "The middle reading means nothing is owed - nothing was sent on-chain."
 
-    return await _finish_fresh(policy, readings, note, floor_tx, floor_ratio, ceiling_ratio, floor_amount, ceiling_amount, delta, disagree, start)
+    return await _finish_fresh(policy, readings, note, paid_tx, floor_ratio, ceiling_ratio, settled, paid_amount, disagree, start)
 
 
 @app.post(

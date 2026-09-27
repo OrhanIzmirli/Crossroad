@@ -2,7 +2,7 @@
 
 *Formerly Agent Pay.* Where agents meet payments.
 
-Parametric insurance that settles itself: two independent data sources decide the payout, and the money moves on Solana the moment the rule is hit — no adjuster, no claim form, no waiting.
+Parametric insurance that settles itself: three independent data sources decide the payout, and the money moves on Solana the moment the rule is hit — no adjuster, no claim form, no waiting.
 
 Built at Blockchain Hack Warsaw (Colosseum hackathon).
 
@@ -12,7 +12,7 @@ Traditional parametric insurance still relies on a single data feed and a manual
 
 ## The solution
 
-Crossroad reads two independent sources for every policy (plus a satellite crop-health index where relevant) and applies a deterministic formula to decide how much is owed. When the sources agree, the full amount pays out immediately. When they disagree, only the portion every source agrees on is paid at once; the disputed remainder is held in an on-chain escrow account until a fresh reading resolves it or a human reviewer decides. An AI watchdog can explain *why* sources disagree, but it never sets a payout amount or moves funds — only the formula and a human reviewer can do that.
+Crossroad reads three independent weather models for every policy (plus a satellite crop-health index where relevant) and applies a deterministic formula to decide how much is owed. The middle reading sets the payout, which is paid at once: no adjuster, no approval, no waiting. An AI writes a plain explanation of every payout, but it never sets or moves an amount.
 
 Every payout is a real transaction on Solana devnet, verifiable on [Solana Explorer](https://explorer.solana.com/address/D93HiJbqXdt13pQxmehaqFvYGieRGrvXHxcVXt584N8B?cluster=devnet).
 
@@ -20,10 +20,10 @@ Every payout is a real transaction on Solana devnet, verifiable on [Solana Explo
 
 | Product | Covers | Trigger source(s) | Data |
 |---|---|---|---|
-| **Crop – Drought** | Rainfall falling below a threshold during the growing window | Two independent rainfall models, optional satellite NDVI | Live |
-| **Crop – Excess rain** | Rainfall exceeding a threshold (flooding) | Two independent rainfall models, optional satellite NDVI | Live |
-| **Event cancellation** | An outdoor event disrupted by weather | Two independent rainfall models, plus ticketing status as a second opinion | Live |
-| **Travel delay** | A flight or journey delayed past a threshold | Two independent delay feeds | Simulated (demo) |
+| **Crop – Drought** | Rainfall falling below a threshold during the growing window | Three independent rainfall models, optional satellite NDVI | Live |
+| **Crop – Excess rain** | Rainfall exceeding a threshold (flooding) | Three independent rainfall models, optional satellite NDVI | Live |
+| **Event cancellation** | An outdoor event disrupted by weather | Three independent rainfall models, plus ticketing status as an extra opinion | Live |
+| **Travel delay** | A flight or journey delayed past a threshold | Three independent delay feeds | Simulated (demo) |
 
 Each product ships with a sensible default rule (trigger/exit values) that can be adjusted, or replaced entirely with a custom rule.
 
@@ -33,10 +33,10 @@ Each product ships with a sensible default rule (trigger/exit values) that can b
 payout_ratio = clamp((trigger - observed) / (trigger - exit), 0, 1)
 ```
 
-- The **floor** is the lowest payout ratio any source allows — paid immediately, no review needed.
-- The **ceiling** is the highest payout ratio any source allows.
-- If the gap between floor and ceiling is within tolerance, the sources count as agreeing and the full amount is paid.
-- If the gap exceeds tolerance, the floor amount pays now and the difference is locked in an on-chain escrow account (a program-controlled PDA, not held by the app) until the next reading or a reviewer resolves it.
+- Every source's reading is turned into a payout ratio with the policy's own rule.
+- The payout is the **median** of those ratios (the middle reading), paid in full on-chain at once. With three weather models, one broken or manipulated source is outvoted and cannot change the payout on its own.
+- Nothing is held back and nobody has to approve anything. An AI writes a plain explanation of every payout and flags suspicious disagreements for a later audit; it never sets, changes or stops a payment.
+- Known limit: if two sources are wrong in the same direction, the median follows them.
 
 ## Architecture
 
@@ -56,8 +56,8 @@ This is a monorepo with three parts:
 ```
 
 - **`AgnetPay/`** — the frontend. Calls the backend over HTTP, shows the Playground (create/evaluate a policy) and Activity (insurer wallet + on-chain history) views.
-- **`agentpay_backend/`** — a FastAPI service. Creates and evaluates policies, aggregates weather/satellite/event/delay data, computes the payout formula, and submits transactions from an insurer wallet on Solana devnet. Can escrow disputed amounts either in a JSON ledger (default) or on-chain via `agent_pay_vault` (`AGENT_PAY_ONCHAIN_ESCROW=1`).
-- **`agent_pay_vault/`** — an Anchor (Rust) program deployed to Solana devnet. Holds disputed escrow amounts in program-controlled PDAs; only `release_escrow` / `void_escrow`, signed by the insurer authority, can move them.
+- **`agentpay_backend/`** — a FastAPI service. Creates and evaluates policies, aggregates weather/satellite/event/delay data, computes the payout formula, pays the median amount from an insurer wallet on Solana devnet in one transaction, and writes a plain explanation of every payout (Groq, or rule-based sentences).
+- **`agent_pay_vault/`** — an Anchor (Rust) escrow program deployed to Solana devnet. Not used by new policies since the median payout (nothing is held any more); kept for policies evaluated before that.
 
 ## Tech stack
 
@@ -115,7 +115,7 @@ This is a hackathon prototype. Known gaps:
 
 - **Premiums are a flat demo rate, not real pricing.** Every policy costs 3% of its cover, paid upfront to the insurer wallet and not refundable. There is no risk-based pricing or underwriting.
 - **Travel delay data is simulated.** The other three products read live weather/satellite/event data; travel delay currently uses demo feeds only.
-- **On-chain escrow is opt-in.** The default escrow path is a JSON ledger in the backend; the deployed vault program is used only when `AGENT_PAY_ONCHAIN_ESCROW=1` is set.
+- **The median has a limit.** It protects against one bad source, not against two sources that are wrong in the same direction.
 - **Devnet only.** Nothing here is audited or intended for mainnet funds.
 
 ## License

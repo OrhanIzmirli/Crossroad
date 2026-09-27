@@ -324,6 +324,8 @@ async def fetch_result(query: str) -> DataResult:
 # returns nulls for recent days, which is awkward for a live demo.)
 RAIN_MODEL_A = os.environ.get("RAIN_MODEL_A", "best_match")
 RAIN_MODEL_B = os.environ.get("RAIN_MODEL_B", "ecmwf_ifs025")
+# A third model makes the median meaningful: one outlier can no longer decide the payout on its own.
+RAIN_MODEL_C = os.environ.get("RAIN_MODEL_C", "icon_seamless")
 OPEN_METEO_FORECAST = "https://api.open-meteo.com/v1/forecast"
 
 
@@ -357,17 +359,18 @@ async def _rainfall_total(client: httpx.AsyncClient, lat: float, lon: float, sta
 
 
 async def fetch_rainfall_readings(lat: float, lon: float, window_start: str, window_end: str) -> list[SourceReading]:
-    """Two independent rainfall totals for the same window. A source that
+    """Three independent rainfall totals for the same window. A source that
     fails is DROPPED (not reported as 0 mm) so a dead feed can never look
     like a drought. Raises only if every source fails."""
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, headers=HEADERS, follow_redirects=True) as client:
         results = await asyncio.gather(
             _rainfall_total(client, lat, lon, window_start, window_end, RAIN_MODEL_A),
             _rainfall_total(client, lat, lon, window_start, window_end, RAIN_MODEL_B),
+            _rainfall_total(client, lat, lon, window_start, window_end, RAIN_MODEL_C),
             return_exceptions=True,
         )
     readings: list[SourceReading] = []
-    for model, res in zip((RAIN_MODEL_A, RAIN_MODEL_B), results):
+    for model, res in zip((RAIN_MODEL_A, RAIN_MODEL_B, RAIN_MODEL_C), results):
         if isinstance(res, SourceReading):
             readings.append(res)
         else:

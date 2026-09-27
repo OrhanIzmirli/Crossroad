@@ -89,6 +89,7 @@ class DisputeReport:
     recommendation: str       # "auto_resolve" | "escalate"
     ai_used: bool             # False when the heuristic fallback ran
     model: str                # model id, or "heuristic"
+    plain: str = ""           # 2-3 jargon-free sentences for the policyholder; "" when unavailable (UI falls back to its own text)
 
 
 @dataclass
@@ -105,3 +106,5 @@ class EvaluationResult:
     dispute: DisputeReport | None
     escrow: dict | None           # ledger entry from escrow.py, if one was opened
     elapsed_ms: float
+    payout_ratio_settled: float | None = None   # median of all sources: the ratio actually paid
+    paid_amount_sol: float | None = None         # sum_insured x payout_ratio_settled, paid in full at once

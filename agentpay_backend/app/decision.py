@@ -47,7 +47,7 @@ from app.formula import DEFAULT_TOLERANCE, payout_amount, payout_ratio
 from app.models import DisputeReport, Policy, SourceReading
 from app.products import PRODUCTS
 
-# Spread (ceiling - floor payout ratio) at/above which we never auto-resolve.
+# Spread (highest - lowest payout ratio) at/above which a case is always flagged for audit.
 HARD_ESCALATE_SPREAD = 0.40
 
 WATCHDOG_MODEL = os.environ.get("WATCHDOG_MODEL", "claude-opus-5")
@@ -84,30 +84,47 @@ def system_prompt(ctx: "DisputeContext") -> str:
         "Context you must respect:",
         "- The payout is computed by a fixed formula from observed readings. You do not set, adjust or approve any amount, and you must not suggest one.",
         f"- Two or more independent sources for the same policy and window disagree beyond tolerance. Sources here: {sources}. Each reading has already been mapped to a payout ratio with the policy's own thresholds, so compare the ratios.",
-        "- The floor amount (the least-loss reading's payout) is paid on-chain immediately; it can be 0, in which case nothing is paid yet. Only the disputed delta is held in escrow. State the real floor amount from the readings; never claim the floor was paid when it is 0.",
+        "- The payout is the median of the sources' payout ratios (the middle reading), paid in full on-chain at once. Nothing is held back and nobody approves it: your text cannot change or delay any payment. Do not state amounts; the app states what was paid.",
     ]
     if ctx.status:
         lines.append("- Status readings (unit status, e.g. ticketmaster_event_status) are independent non-measurement evidence: cancelled/postponed = ratio 1.0, still going ahead = 0.0.")
     lines.append(
         "- Your job: work out why the sources disagree, look for signs of a sensor fault, data outage or manipulation (for example one source reporting exactly zero while another reports a large value, "
         "a reading that is implausible for the place or situation, or a spread far larger than normal variance between independent providers), explain the situation in plain language a non-technical reviewer can act on, "
-        "and recommend either \"auto_resolve\" (the disagreement looks like ordinary variance and fresh readings next cycle can be trusted to settle it) or \"escalate\" (a human should look before the escrow is released or voided).")
+        "and recommend either \"auto_resolve\" (the disagreement looks like ordinary variance) or \"escalate\" (it looks like a fault or manipulation worth auditing afterwards; this only flags the case, it does not stop or change the payment).")
     if ctx.satellite and ctx.measured:
         lines.append(f"- A satellite reading is present: cross-reference it explicitly against the {ctx.metric.lower()} readings: they measure the cause, the satellite measures the outcome (crop health). "
                      "Spell out any conflict between them, naming the satellite reading and its date.")
     lines.append("- Prefer \"escalate\" whenever manipulation or a fault is plausible. Be concrete in the evidence list: cite the actual numbers you were given.")
+    lines.append("- Readings marked SIMULATED / injected are demo values chosen on purpose for a demonstration. Judge them as if they were real readings: being simulated is not itself a sign of a fault or manipulation, so do not mention it.")
+    banned = [w for w in PLAIN_BANNED if w != "NDVI" or ctx.satellite]
+    lines.append("- Also write plain_summary for the policyholder, someone with no technical, insurance or crypto knowledge: 2-3 short sentences in everyday words, addressing them as \"you\". "
+                 f"Say what each source reported (numbers with their unit, {ctx.unit}, are fine), why the different answers matter in real life, that the app paid by the middle report, so nothing waits and nobody has to approve it, and what that meant for them: nothing owed, part of the cover (a percentage is fine) or all of it. "
+                 "Name the middle report with its value and say where it sits against the rule, using the 'In plain words' line of the context (for example: the middle report was X, short of the point where payment starts, so nothing is paid). "
+                 "Do not mention money amounts or SOL (the app shows them from the real numbers), and never use these words: " + ", ".join(banned) + ".")
     return "\n".join(lines)
+
+
+PLAIN_BANNED = ("payout ratio", "ratio", "spread", "floor", "ceiling", "delta", "escrow", "variance", "tolerance", "median", "NDVI", "simulated", "injected", "oracle")
+_PLAIN_BAD = re.compile(r"\b(" + "|".join(re.escape(w) for w in PLAIN_BANNED) + r"|SOL)\b", re.I)
+
+
+def _plain(text: object) -> str:
+    """The customer-facing sentences, or "" if the model ignored the rules (then the UI uses its own wording)."""
+    t = " ".join(str(text or "").split())
+    return "" if not t or len(t) > 500 or _PLAIN_BAD.search(t) else t
 
 
 REPORT_SCHEMA = {
     "type": "object",
     "properties": {
         "summary": {"type": "string", "description": "2-4 plain-language sentences for the reviewer"},
+        "plain_summary": {"type": "string", "description": "2-3 jargon-free sentences for the policyholder, no money amounts"},
         "suspected_cause": {"type": "string", "description": "short label, e.g. 'model spread', 'sensor dropout', 'possible manipulation', 'weather vs satellite conflict'"},
         "evidence": {"type": "array", "items": {"type": "string"}, "description": "3-6 concrete, checkable points"},
         "recommendation": {"type": "string", "enum": ["auto_resolve", "escalate"]},
     },
-    "required": ["summary", "suspected_cause", "evidence", "recommendation"],
+    "required": ["summary", "plain_summary", "suspected_cause", "evidence", "recommendation"],
     "additionalProperties": False,
 }
 
@@ -136,6 +153,7 @@ class DisputeContext:
     readings: list[SourceReading]
     floor_ratio: float
     ceiling_ratio: float
+    paid_ratio: float | None = None   # None = an escrow cycle from before median settlement: the floor was paid
 
     @property
     def spread(self) -> float:
@@ -178,11 +196,39 @@ class DisputeContext:
     def ceiling_amount(self) -> float:
         return payout_amount(self.policy.sum_insured_sol, self.ceiling_ratio)
 
-    def floor_clause(self) -> str:
-        """What actually happened to the floor, from the real numbers. Never assumes it was paid."""
-        if self.floor_amount > 0:
-            return f"The floor ({self.floor_ratio:.3f}, {self.floor_amount:.4f} SOL) is paid immediately"
-        return "The floor is 0, so nothing has been paid yet"
+    @property
+    def paid(self) -> float:
+        return self.floor_ratio if self.paid_ratio is None else self.paid_ratio
+
+    @property
+    def paid_amount(self) -> float:
+        return payout_amount(self.policy.sum_insured_sol, self.paid)
+
+    def paid_clause(self) -> str:
+        """What was actually paid, from the real numbers. The only money statement a report may contain."""
+        if self.paid_ratio is None:
+            return (f"{self.paid_amount:.4f} SOL was paid at once; the rest is still held from an earlier cycle" if self.paid_amount > 0
+                    else "Nothing has been paid yet; the rest is still held from an earlier cycle")
+        if self.paid_amount > 0:
+            return f"{self.paid_amount:.4f} SOL (the middle reading, ratio {self.paid:.3f}) was paid in full at once; nothing is held back"
+        return "The middle reading means nothing is owed, so nothing was paid"
+
+    def middle_reading(self) -> str | None:
+        """The middle report in the policy's own unit, when it is one of the measured readings (odd count, no
+        satellite/status votes); otherwise None and the explanation talks about shares of the cover instead."""
+        if len(self.measured) != len(self.readings) or len(self.measured) % 2 == 0:
+            return None
+        vals = sorted(r.observed_mm for r in self.measured)
+        return f"{vals[len(vals) // 2]:g} {self.unit}"
+
+    def paid_position(self) -> str:
+        """Where the paid result sits against the rule, in words a policyholder can follow."""
+        p = self.policy
+        if self.paid <= 0:
+            return f"does not reach the {p.trigger_mm:g} {self.unit} point where payment starts"
+        if self.paid >= 1:
+            return f"reaches the {p.exit_mm:g} {self.unit} point where you get everything"
+        return f"is between {p.trigger_mm:g} {self.unit}, where payment starts, and {p.exit_mm:g} {self.unit}, where you get everything"
 
     @property
     def satellite(self) -> list[SourceReading]:
@@ -212,56 +258,33 @@ class DisputeContext:
         if self.status:
             lines.append("Status sources (e.g. ticketmaster_event_status) are not continuous values: a cancelled/postponed event implies ratio 1.0, an event still going ahead implies 0.0.")
         lines.append(
-            f"Payout ratio floor {self.floor_ratio:.3f} (least-loss reading; pays {self.floor_amount:.4f} SOL now"
-            f"{' - nothing is paid at the floor' if self.floor_amount <= 0 else ''}), "
-            f"ceiling {self.ceiling_ratio:.3f} (most-loss reading; up to {self.ceiling_amount:.4f} SOL in total), "
-            f"spread {self.spread:.3f}. The difference, {self.ceiling_amount - self.floor_amount:.4f} SOL, is held in escrow only if the sources disagree beyond tolerance."
+            f"Lowest payout ratio {self.floor_ratio:.3f}, highest {self.ceiling_ratio:.3f}, spread {self.spread:.3f}. "
+            f"Payout = the median ratio {self.paid:.3f} = {self.paid_amount:.4f} SOL, paid in full at once; nothing is held."
         )
+        mid = self.middle_reading()
+        lines.append(f"In plain words: the middle report is {mid}; it {self.paid_position()}." if mid
+                     else f"In plain words: the middle result {self.paid_position()}.")
         return "\n".join(lines)
 
 
 _SENT = re.compile(r"(?<=[a-z0-9)%])[.;]" + chr(92) + "s+(?=[A-Z])|" + chr(92) + "n")
-_PAID = re.compile(r"already paid|has been paid|have been paid|(?:is|was|were|been) paid|paid (?:now|immediately|at once)", re.I)
-_NOTHING_PAID = re.compile(r"nothing|not (?:yet )?(?:been )?paid|no (?:sol|payment|payout)|unpaid|" + chr(92) + "b0(?:" + chr(92) + ".0+)?" + chr(92) + "s*sol" + chr(92) + "s+paid|0 sol paid", re.I)
-_CLAIMS_ZERO = re.compile(r"floor(?: payout| amount| ratio)? (?:is|was|=|of) (?:zero|0(?:\.0+)?)(?!\.?\d)|nothing (?:has been |is |was )?paid", re.I)
-
-
-def _contradicts_floor(text: str, ctx: "DisputeContext") -> bool:
-    """Does any sentence about the floor say something the real amount contradicts? A floor of 0 was never paid
-    ('already paid' next to 0 SOL is wrong); a positive floor was paid at once ('nothing paid' is wrong)."""
-    for sentence in _SENT.split(unicodedata.normalize("NFKC", text)):   # models emit U+202F etc. inside "0 SOL"
-        if "floor" not in sentence.lower():
-            continue
-        if ctx.floor_amount <= 0 and _PAID.search(sentence) and not _NOTHING_PAID.search(sentence.replace("(already paid)", "(ALREADYPAID)")):
-            return True
-        if ctx.floor_amount <= 0 and "(already paid)" in sentence.lower():
-            return True
-        if ctx.floor_amount > 0 and _CLAIMS_ZERO.search(sentence):
-            return True
-    return False
+# Any sentence that talks about paying, holding or releasing money. The model is told not to; if it does anyway
+# the sentence is dropped, and the one money statement in a report is always ctx.paid_clause() from the real numbers.
+_MONEY = re.compile(r"\b(floor|ceiling|escrow|held|hold|holds|delta|paid|pays?|payment|releas\w*|void\w*)\b", re.I)
 
 
 def _guardrail(report: DisputeReport, ctx: DisputeContext) -> DisputeReport:
-    """Deterministic overrides applied to every provider's report: big spreads always go to a human, and
-    the summary always states what happened to the floor (a model may omit it or get it wrong)."""
+    """Deterministic overrides applied to every provider's report: the only statement about money is the real one,
+    and a big spread is always flagged for audit (it never stops or changes the payment)."""
     sentences = [s.strip() for s in _SENT.split(unicodedata.normalize("NFKC", report.summary)) if s.strip()]
-    correct_clause = f"{ctx.floor_clause()}."
-    if not sentences or not any("floor" in s.lower() for s in sentences):
-        report.summary = f"{report.summary.rstrip()} {correct_clause}" if sentences else correct_clause
-    else:
-        # A sentence that names the floor and gets it wrong is REPLACED, not just followed by a
-        # correction - two sentences that contradict each other in the same paragraph is worse
-        # than an unexplained gap.
-        rebuilt = [correct_clause if ("floor" in s.lower() and _contradicts_floor(s, ctx))
-                   else (s if s.endswith((".", "!", "?")) else s + ".")
-                   for s in sentences]
-        report.summary = " ".join(rebuilt)
-    fixed = f"Floor: ratio {ctx.floor_ratio:.3f} = {ctx.floor_amount:.4f} SOL ({'paid immediately' if ctx.floor_amount > 0 else 'nothing paid yet'})"
-    report.evidence = [fixed if _contradicts_floor(e, ctx) else e for e in report.evidence]
+    kept = [s if s.endswith((".", "!", "?")) else s + "." for s in sentences if not _MONEY.search(s)]
+    report.summary = " ".join(kept + [f"{ctx.paid_clause()}."])
+    report.evidence = [e for e in report.evidence if not re.search(r"\b(escrow|held|releas\w*|void\w*|paid)\b", e, re.I)]
+    report.evidence.append(f"Paid: middle ratio {ctx.paid:.3f} = {ctx.paid_amount:.4f} SOL" + (", in full, at once" if ctx.paid_ratio is not None else ""))
     if ctx.spread >= HARD_ESCALATE_SPREAD and report.recommendation != "escalate":
         report.recommendation = "escalate"
         report.evidence.append(
-            f"Guardrail: spread {ctx.spread:.2f} is at/above the hard limit {HARD_ESCALATE_SPREAD:.2f}; escalated regardless of the model's view."
+            f"Guardrail: spread {ctx.spread:.2f} is at/above the hard limit {HARD_ESCALATE_SPREAD:.2f}; flagged for audit regardless of the model's view."
         )
     return report
 
@@ -295,16 +318,15 @@ def investigate_heuristic(ctx: DisputeContext) -> DisputeReport:
                     f"The {ctx.noun} readings ({m_txt}) suggest a significant loss (payout ratio about {m_ratio:.2f}), "
                     f"but satellite imagery of the field{when} shows vegetation that is still healthy "
                     f"(NDVI {sat.observed_mm:.2f}, ratio {s_ratio:.2f}). A {ctx.noun} reading that did not translate into crop damage, "
-                    "or a data feed that overstates the event, is worth a reviewer's look before the delta is released."
+                    "or a data feed that overstates the event, is worth an audit."
                 )
             else:
                 summary = (
                     f"Satellite imagery of the field{when} shows stressed or missing vegetation "
                     f"(NDVI {sat.observed_mm:.2f}, ratio {s_ratio:.2f}) while the {ctx.noun} readings ({m_txt}) "
                     f"suggest little or no loss (ratio about {m_ratio:.2f}). The damage may have a cause the {ctx.noun} "
-                    "index does not capture (heat, pests, a different field), so a reviewer should check the imagery before deciding."
+                    "index does not capture (heat, pests, a different field), so the imagery is worth an audit."
                 )
-            summary += f" {ctx.floor_clause()}."
             return _guardrail(
                 DisputeReport(summary=summary, suspected_cause=f"{ctx.noun} vs satellite conflict", evidence=evidence,
                               recommendation="escalate", ai_used=False, model="heuristic"),
@@ -323,13 +345,12 @@ def investigate_heuristic(ctx: DisputeContext) -> DisputeReport:
                 summary = (
                     f"The event's own status is '{st.status}' (implied ratio {s_ratio:.2f}) while {o_txt} imply little or no loss "
                     f"(ratio about {o_ratio:.2f}). The event may have been called off for a reason the {ctx.noun} reading does not capture "
-                    f"(artist, permits, safety, ticket sales), so a reviewer should confirm before the extra {ctx.ceiling_amount - ctx.floor_amount:.4f} SOL is released. "
-                    f"{ctx.floor_clause()}."
+                    "(artist, permits, safety, ticket sales), so it is worth an audit."
                 )
             else:
                 summary = (
                     f"{o_txt} imply a loss (ratio about {o_ratio:.2f}) but the event's status is '{st.status}' (implied ratio {s_ratio:.2f}), "
-                    f"i.e. it appears to be going ahead. A reviewer should check before the delta is released. {ctx.floor_clause()}."
+                    "i.e. it appears to be going ahead. It is worth an audit."
                 )
             return _guardrail(
                 DisputeReport(summary=summary, suspected_cause="event status vs measurement conflict", evidence=evidence,
@@ -346,7 +367,7 @@ def investigate_heuristic(ctx: DisputeContext) -> DisputeReport:
         summary = (
             f"{zero.source} reports exactly 0 {ctx.unit} while {other.source} reports {other.observed_mm:.1f} {ctx.unit}. "
             f"A flat zero next to a real {ctx.noun} value usually means a data outage or a stuck feed, not a genuine reading. "
-            "That zero would change the payout, so it should not be trusted without a human check."
+            "That zero is worth an audit."
         )
         recommendation = "escalate"
     elif ctx.spread >= HARD_ESCALATE_SPREAD:
@@ -355,7 +376,7 @@ def investigate_heuristic(ctx: DisputeContext) -> DisputeReport:
             f"The most-loss source ({most_loss.source}, {_fmt(most_loss)}, ratio {_ratio(p, most_loss):.2f}) and the least-loss source "
             f"({least_loss.source}, {_fmt(least_loss)}, ratio {_ratio(p, least_loss):.2f}) imply payout ratios {ctx.spread:.2f} apart. "
             "That is well beyond normal variance between independent sources and the difference favours a larger payout, "
-            "so a reviewer should confirm before release."
+            "so it is worth an audit."
         )
         recommendation = "escalate"
     else:
@@ -363,10 +384,8 @@ def investigate_heuristic(ctx: DisputeContext) -> DisputeReport:
         summary = (
             f"The sources differ ({_fmt(least_loss)} vs {_fmt(most_loss)}, payout ratios {_ratio(p, least_loss):.2f} vs {_ratio(p, most_loss):.2f}) "
             "but stay in the same range; this looks like ordinary variance between providers rather than a fault. "
-            f"{ctx.floor_clause()}; the delta can be settled from fresh readings on the next cycle."
         )
         recommendation = "auto_resolve"
-    summary += "" if "floor" in summary.lower() else f" {ctx.floor_clause()}."
 
     return _guardrail(
         DisputeReport(summary=summary, suspected_cause=cause, evidence=evidence,
@@ -395,6 +414,7 @@ async def investigate_with_llm(ctx: DisputeContext) -> DisputeReport:
     return _guardrail(
         DisputeReport(
             summary=str(data["summary"]),
+            plain=_plain(data.get("plain_summary")),
             suspected_cause=str(data["suspected_cause"]),
             evidence=[str(e) for e in data["evidence"]],
             recommendation=data["recommendation"],
@@ -411,12 +431,13 @@ async def investigate_with_groq(ctx: DisputeContext) -> DisputeReport:
     message, then the same validation and guardrail as every other path."""
     template = {
         "summary": "2-4 plain-language sentences for the reviewer",
+        "plain_summary": "2-3 jargon-free sentences for the policyholder, no money amounts",
         "suspected_cause": "short label, e.g. model spread",
         "evidence": ["3-6 concrete points citing the actual numbers"],
         "recommendation": "auto_resolve or escalate",
     }
     schema_hint = (
-        "\n\nInvestigate and report. Reply with ONE JSON object and nothing else, using EXACTLY these four keys "
+        "\n\nInvestigate and report. Reply with ONE JSON object and nothing else, using EXACTLY these five keys "
         "(no others, no nesting beyond the evidence array of strings): " + json.dumps(template)
     )
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -442,6 +463,7 @@ async def investigate_with_groq(ctx: DisputeContext) -> DisputeReport:
     return _guardrail(
         DisputeReport(
             summary=str(data["summary"]),
+            plain=_plain(data.get("plain_summary")),
             suspected_cause=str(data["suspected_cause"]),
             evidence=[str(e) for e in data["evidence"]],
             recommendation=recommendation,
@@ -461,10 +483,11 @@ def active_provider() -> str:
     return "rule-based (no GROQ_API_KEY / ANTHROPIC_API_KEY)"
 
 
-async def investigate(policy: Policy, readings: list[SourceReading], floor_ratio: float, ceiling_ratio: float) -> DisputeReport:
+async def investigate(policy: Policy, readings: list[SourceReading], floor_ratio: float, ceiling_ratio: float,
+                      paid_ratio: float | None = None) -> DisputeReport:
     """Entry point used by main.py. Never raises - the demo must not stall
     because the model is unreachable. Never returns an amount."""
-    ctx = DisputeContext(policy, readings, floor_ratio, ceiling_ratio)
+    ctx = DisputeContext(policy, readings, floor_ratio, ceiling_ratio, paid_ratio)
     # Precedence: Groq (free tier) -> Claude -> rule-based. A failing provider falls through to the next.
     providers = []
     if _secret("GROQ_API_KEY"):
@@ -484,3 +507,59 @@ async def investigate(policy: Policy, readings: list[SourceReading], floor_ratio
     report = investigate_heuristic(ctx)
     report.evidence.append(f"AI investigation unavailable ({'; '.join(failures)}); rule-based analysis shown instead.")
     return report
+
+
+# ---------------------------------------------------------------------------
+# Plain-language account of every settlement, shown to the policyholder whether or not the sources agreed.
+# ---------------------------------------------------------------------------
+
+def bottom_line(ctx: DisputeContext) -> str:
+    """One deterministic sentence with the fact that decides the payout. Shown under every explanation, so the
+    key point never depends on the model following instructions."""
+    share = "nothing is owed" if ctx.paid <= 0 else "the whole cover is paid" if ctx.paid >= 1 else f"{ctx.paid * 100:.0f}% of the cover is paid"
+    mid = ctx.middle_reading()
+    return f"The middle report, {mid}, {ctx.paid_position()}, so {share}." if mid else f"The middle result {ctx.paid_position()}, so {share}."
+
+
+def settlement_fallback(ctx: DisputeContext, disagree: bool) -> str:
+    """Rule-based sentences with the same rules as the AI text: everyday words, no money amounts."""
+    vals = ", ".join(_fmt(r) for r in ctx.measured) or "the readings"
+    share = "nothing is owed" if ctx.paid <= 0 else "the whole cover is paid" if ctx.paid >= 1 else f"{ctx.paid * 100:.0f}% of the cover is paid"
+    middle = bottom_line(ctx).replace("The middle report", "The middle one", 1)
+    if disagree:
+        return f"The sources gave different answers: {vals}. {middle} The app pays by the middle one, so nothing waits and nobody has to approve it."
+    return f"The sources reported {vals}. {middle}"
+
+
+async def explain_settlement(policy: Policy, readings: list[SourceReading], floor_ratio: float, ceiling_ratio: float,
+                             paid_ratio: float) -> dict:
+    """Ask Groq to tell the policyholder what happened when the sources AGREED (disagreements already get an
+    explanation from investigate()). Never raises; never states amounts; falls back to rule-based sentences."""
+    ctx = DisputeContext(policy, readings, floor_ratio, ceiling_ratio, paid_ratio)
+    fallback = {"plain": settlement_fallback(ctx, disagree=False), "ai_used": False, "model": "rule-based", "bottom_line": bottom_line(ctx)}
+    key = _secret("GROQ_API_KEY")
+    if not key:
+        return fallback
+    banned = [w for w in PLAIN_BANNED if w != "NDVI" or ctx.satellite]
+    system = ("You explain an automatic parametric insurance payout to the policyholder, someone with no technical, insurance or crypto knowledge. "
+              "Write 2-3 short sentences in everyday words, addressing them as \"you\": what the sources reported (numbers with their unit are fine), what the policy's rule is "
+              "(where it starts paying and where it pays in full), and what that meant for them: nothing owed, part of the cover, or all of it (a percentage is fine). "
+              "Name the middle report with its value and say where it sits against the rule, using the 'In plain words' line of the context (for example: the middle report was X, short of the point where payment starts, so nothing is paid). "
+              "Readings marked SIMULATED are demo values chosen on purpose; treat them as real and do not mention it. "
+              "Do not mention money amounts or SOL (the app shows them), and never use these words: " + ", ".join(banned) + ". "
+              'Reply with ONE JSON object and nothing else: {"plain_summary": "..."}')
+    user = ctx.describe() + f"\nShare of the cover paid: {ctx.paid * 100:.0f}%."
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(GROQ_URL, headers={"Authorization": f"Bearer {key}"}, json={
+                "model": _secret("GROQ_MODEL") or GROQ_DEFAULT_MODEL, "temperature": 0.2, "response_format": {"type": "json_object"},
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
+        resp.raise_for_status()
+        body = resp.json()
+        plain = _plain(json.loads(body["choices"][0]["message"]["content"]).get("plain_summary"))
+        if plain:
+            return {"plain": plain, "ai_used": True, "model": f"groq:{body.get('model', GROQ_DEFAULT_MODEL)}", "bottom_line": bottom_line(ctx)}
+        print("[explain] groq reply broke the plain-language rules; using the rule-based sentences")
+    except Exception as e:  # noqa: BLE001 - network, rate limit, bad JSON
+        print(f"[explain] groq call failed ({e!r})")
+    return fallback
