@@ -28,6 +28,7 @@ PRODUCTS: dict[str, dict] = {
         "tagline": "Wheat, barley and other crops that suffer when the week is too dry.",
         "metric_unit": "mm", "metric_label": "Rainfall",
         "direction": "less", "trigger": 40.0, "exit": 10.0,
+        "cover_usd": [50, 150, 400],  # quick-pick cover amounts; the client converts them to SOL at the live price
         "sources": "live", "source_note": "Two live weather models (Open-Meteo best match, ECMWF IFS), optional satellite NDVI.",
     },
     ProductType.CROP_EXCESS_RAIN.value: {
@@ -38,6 +39,7 @@ PRODUCTS: dict[str, dict] = {
         "tagline": "Corn and other crops that drown when the week is too wet.",
         "metric_unit": "mm", "metric_label": "Rainfall",
         "direction": "more", "trigger": 80.0, "exit": 140.0,
+        "cover_usd": [50, 150, 400],
         "sources": "live", "source_note": "Two live weather models (Open-Meteo best match, ECMWF IFS), optional satellite NDVI.",
     },
     ProductType.EVENT_WEATHER_CANCEL.value: {
@@ -48,6 +50,7 @@ PRODUCTS: dict[str, dict] = {
         "tagline": "Any real rain over the event window voids the event; the cover pays the organiser.",
         "metric_unit": "mm", "metric_label": "Rainfall",
         "direction": "more", "trigger": 5.0, "exit": 25.0,
+        "cover_usd": [30, 60, 120],
         "sources": "live", "source_note": "Same two live weather models as the crop products, read over the event window.",
     },
     ProductType.TRAVEL_DELAY.value: {
@@ -58,6 +61,7 @@ PRODUCTS: dict[str, dict] = {
         "tagline": "Pays the traveller when the delay passes 30 minutes, in full at 3 hours.",
         "metric_unit": "min", "metric_label": "Delay",
         "direction": "more", "trigger": 30.0, "exit": 180.0,
+        "cover_usd": [50, 150, 300],
         "sources": "demo", "source_note": "DEMO data source: two simulated delay feeds. No live flight/train API is integrated; the dispute/escrow mechanics are the same as the live weather products.",
     },
 }

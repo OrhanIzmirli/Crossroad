@@ -1,4 +1,6 @@
-# Agent Pay - backend (parametric weather insurance)
+# Crossroad - backend (parametric weather insurance)
+
+*Formerly Agent Pay.*
 
 A parametric rainfall insurance prototype on **Solana devnet**. A fixed
 formula decides every payout. Two independent rainfall sources are read for
@@ -187,7 +189,7 @@ Evaluation fields the frontend shows: `payout_ratio_floor`,
 `readings[]`, `dispute` (summary, suspected_cause, evidence, recommendation,
 ai_used, model).
 
-`sum_insured_sol` is capped at 0.05 SOL (`MAX_SUM_INSURED_SOL`) so a typo
+`sum_insured_sol` is capped at 5 SOL (`MAX_SUM_INSURED_SOL`) so a typo
 cannot drain the demo wallet.
 
 ## Demo script

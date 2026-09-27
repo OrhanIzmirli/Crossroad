@@ -70,6 +70,28 @@ async def _get(client: httpx.AsyncClient, path: str, params: dict) -> dict:
     return r.json()
 
 
+async def search_venues(keyword: str, size: int = 6) -> list[dict]:
+    """Venue autocomplete for the Playground. Returns [] without a key or on any error; never raises."""
+    key = _api_key()
+    if not key or len(keyword.strip()) < 2:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            data = await _get(client, "/venues.json", {"apikey": key, "keyword": keyword.strip(), "size": size})
+    except (httpx.HTTPError, ValueError):
+        return []
+    out = []
+    for v in data.get("_embedded", {}).get("venues", []):
+        loc = v.get("location") or {}
+        try:
+            lat, lon = float(loc["latitude"]), float(loc["longitude"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        out.append({"id": v.get("id"), "name": v.get("name", ""), "city": (v.get("city") or {}).get("name", ""),
+                    "country": (v.get("country") or {}).get("countryCode", ""), "lat": lat, "lon": lon})
+    return out
+
+
 async def fetch_event_status(policy: Policy) -> tuple[SourceReading | None, str | None]:
     """Returns (reading, note). reading is None whenever the source can't speak;
     note explains why, for the evaluation warnings. Never raises."""

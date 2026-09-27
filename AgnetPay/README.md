@@ -1,4 +1,6 @@
-# Agent Pay
+# Crossroad
+
+*Formerly Agent Pay.* Where agents meet payments.
 
 Parametric insurance that settles itself: two independent data sources decide the payout, and the money moves on Solana the moment the rule is hit — no adjuster, no claim form, no waiting.
 
@@ -10,7 +12,7 @@ Traditional parametric insurance still relies on a single data feed and a manual
 
 ## The solution
 
-Agent Pay reads two independent sources for every policy (plus a satellite crop-health index where relevant) and applies a deterministic formula to decide how much is owed. When the sources agree, the full amount pays out immediately. When they disagree, only the portion every source agrees on is paid at once; the disputed remainder is held in an on-chain escrow account until a fresh reading resolves it or a human reviewer decides. An AI watchdog can explain *why* sources disagree, but it never sets a payout amount or moves funds — only the formula and a human reviewer can do that.
+Crossroad reads two independent sources for every policy (plus a satellite crop-health index where relevant) and applies a deterministic formula to decide how much is owed. When the sources agree, the full amount pays out immediately. When they disagree, only the portion every source agrees on is paid at once; the disputed remainder is held in an on-chain escrow account until a fresh reading resolves it or a human reviewer decides. An AI watchdog can explain *why* sources disagree, but it never sets a payout amount or moves funds — only the formula and a human reviewer can do that.
 
 Every payout is a real transaction on Solana devnet, verifiable on [Solana Explorer](https://explorer.solana.com/address/D93HiJbqXdt13pQxmehaqFvYGieRGrvXHxcVXt584N8B?cluster=devnet).
 
@@ -111,10 +113,16 @@ Creating and evaluating a policy triggers real devnet payments: the floor amount
 
 This is a hackathon prototype. Known gaps:
 
-- **Pricing / premiums are not implemented.** Policies are created with a fixed cover amount; there is no premium calculation, underwriting, or payment collection from the policyholder.
+- **Premiums are a flat demo rate, not real pricing.** Every policy costs 3% of its cover (`PREMIUM_RATE`), paid upfront to the insurer wallet and not refundable: from the demo wallet by the backend, or signed by the policyholder in Phantom / a browser-created wallet and verified on-chain before the policy is created. There is no risk-based pricing or underwriting.
 - **Travel delay data is simulated.** The other three products read live weather/satellite/event data; travel delay currently uses demo feeds only.
 - **No persistence guarantees beyond the backend's own storage** — policies and escrow state live in the backend service, not on this frontend.
 - **Devnet only.** Nothing here is audited or intended for mainnet funds.
+
+### Known limitations (deliberately out of scope)
+
+1. **Risk pricing is not solved.** The 3% premium is symbolic: it only shows that higher cover costs more. A real premium would depend on region, season, historical data and risk level.
+2. **No insurable-interest verification.** The system does not check that the location or event a user declares is really theirs (field ownership, ticket or organiser status). That needs a separate identity / land-registry (KYC) layer. There is also no check at sign-up that the pinned spot is farmland at all: the satellite NDVI reading is an optional third vote at evaluation time (crop products only, and only with `AGROMONITORING_API_KEY` set). It says whether vegetation at the pin looks healthy, not whose land it is.
+3. **This project answers "how is a payout computed and paid reliably from live data?"**, not "who is entitled to be insured?" (underwriting / KYC).
 
 ## License
 

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { Brand, CrossroadMark } from './Brand';
 import { ArrowUpRight, ArrowRight, X as XIcon } from 'lucide-react';
 import { explorer } from './api';
 import './landing.css';
@@ -76,7 +77,8 @@ export default function Landing() {
     <section className="lp-hero lp-bleed" data-theme="farm">
       <div className="lp-photo" style={{ backgroundImage: `url(${AERIAL})`, backgroundPosition: 'center 50%' }} aria-hidden="true"/>
       <div className="lp-shade" aria-hidden="true"/>
-      <div className="lp-hero-top"><h1 className="lp-rise">Agent Pay</h1><a className="lp-pill lp-rise lp-d1" href="#playground">Open the playground</a></div>
+      <a className="lp-hero-logo lp-rise" href="/" aria-label="Crossroad: reload the page" onClick={e => { e.preventDefault(); window.location.reload(); }}><CrossroadMark size={44} variant="light"/></a>
+      <div className="lp-hero-top"><h1 className="lp-rise">Crossroad</h1><a className="lp-pill lp-rise lp-d1" href="#playground">Open the playground</a></div>
       <div className="lp-hero-rule lp-rise lp-d1"><span>Crop insurance, reinvented.</span><span className="lp-sol"><svg className="sol-mark" viewBox="0 0 24 20" aria-hidden="true"><path d="M4.6 0h19.4l-4.6 4.8H0z"/><path d="M4.6 7.6h19.4L19.4 12.4H0z"/><path d="M4.6 15.2h19.4L19.4 20H0z"/></svg> Built on Solana · every payout is a real transaction</span><span>A claim settled in seconds,<br/>not a season.</span></div>
     </section>
 
@@ -86,7 +88,7 @@ export default function Landing() {
         <div className="lp-cell lp-c1 lp-r2" data-reveal><span className="lp-big">Most claims</span></div>
         <div className="lp-cell lp-c2 lp-r2 lp-photo-cell" data-reveal style={{ ['--d' as string]: '120ms' }}><span className="lp-mosaic"><i style={{ backgroundImage: `url(${PHOTO})`, backgroundPosition: '30% 60%' }}/><i style={{ backgroundImage: 'url(/event-rain.jpg)' }}/><i style={{ backgroundImage: 'url(/flight-delay.jpg)', backgroundPosition: '85% 40%' }}/><i style={{ backgroundImage: 'url(/transport-delay.jpg)', backgroundPosition: '68% 35%' }}/></span></div>
         <div className="lp-cell lp-c3 lp-r2 lp-span2" data-reveal style={{ ['--d' as string]: '200ms' }}><span className="lp-big">take a season<br/>to pay out</span></div>
-        <div className="lp-cell lp-c4 lp-r3" data-reveal style={{ ['--d' as string]: '320ms' }}><p>A loss report, an adjuster visit, a paper trail. The farmer waits with it, often until the next planting. Agent Pay reads the weather and the field instead, and pays the moment the numbers cross the line.</p></div>
+        <div className="lp-cell lp-c4 lp-r3" data-reveal style={{ ['--d' as string]: '320ms' }}><p>A loss report, an adjuster visit, a paper trail. The farmer waits with it, often until the next planting. Crossroad reads the weather and the field instead, and pays the moment the numbers cross the line.</p></div>
       </div>
     </section>
 
@@ -108,7 +110,7 @@ export default function Landing() {
     <section className="lp-grid lp-product" data-theme="farm">
       <div className="lp-product-head" data-reveal><span className="lp-big">See the field.<br/>See the money.</span><p>Pick a cover, point at the field, and watch the payout settle. Every transaction is real, on Solana devnet.</p></div>
       <div className="lp-shot lp-mock" data-reveal>
-        <div className="lp-shot-bar"><i/><i/><i/><span>agentpay · playground</span></div>
+        <div className="lp-shot-bar"><i/><i/><i/><span>crossroad · playground</span></div>
         <div className="mock-body">
           <div className="mock-verdict"><span className="mock-big"><ArrowUpRight size={22}/></span><div><b>You got paid.</b><p>0.0017 SOL is in your wallet, and 0.0083 SOL more may follow.</p></div></div>
           <ol className="mock-chain">
@@ -131,7 +133,7 @@ export default function Landing() {
         <div className="lp-cell lp-c1 lp-r2" data-reveal><span className="lp-big">A show<br/>rained out</span></div>
         <div className="lp-cell lp-c2 lp-r2 lp-photo-cell" data-reveal style={{ ['--d' as string]: '120ms' }}><span style={{ backgroundImage: 'url(/event-rain.jpg)', backgroundPosition: '42% 40%' }}/></div>
         <div className="lp-cell lp-c3 lp-r2 lp-span2" data-reveal style={{ ['--d' as string]: '200ms', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', gap: 26 }}><span className="lp-big">refunded before<br/>the crowd goes home</span><a className="lp-pill lp-pill-solid" href="#playground?product=event_weather_cancel">Open the playground</a></div>
-        <div className="lp-cell lp-c4 lp-r3" data-reveal style={{ ['--d' as string]: '320ms' }}><p>The stage is built, the crew is booked, and the forecast turns. Agent Pay reads the rain over the event window and pays the organiser once it crosses the line. If the ticketing system says the show is cancelled, that counts as a second opinion.</p></div>
+        <div className="lp-cell lp-c4 lp-r3" data-reveal style={{ ['--d' as string]: '320ms' }}><p>The stage is built, the crew is booked, and the forecast turns. Crossroad reads the rain over the event window and pays the organiser once it crosses the line. If the ticketing system says the show is cancelled, that counts as a second opinion.</p></div>
       </div>
     </section>
 
@@ -152,9 +154,14 @@ export default function Landing() {
     {/* 7c. The watchdog, said plainly (statement grid shape, text only) */}
     <section className="lp-grid lp-statement" data-theme="ai"><Curtain/>
       <div className="lp-cells">
+        <div className="lp-cell lp-c1 lp-r1 lp-role" data-reveal><span>Decides the money</span></div>
+        <div className="lp-cell lp-c3 lp-r1 lp-role" data-reveal style={{ ['--d' as string]: '80ms' }}><span>Explains, never pays</span></div>
         <div className="lp-cell lp-c1 lp-r2" data-reveal><span className="lp-big">The formula</span></div>
         <div className="lp-cell lp-c2 lp-r2" data-reveal style={{ ['--d' as string]: '120ms' }}><span className="lp-big">sets the<br/>amount.</span></div>
         <div className="lp-cell lp-c3 lp-r2 lp-span2" data-reveal style={{ ['--d' as string]: '200ms' }}><span className="lp-big">The AI only<br/>explains why.</span></div>
+        <div className="lp-cell lp-c1 lp-r3 lp-proof" data-reveal style={{ ['--d' as string]: '260ms' }}><small>The rule</small><code>payout = (trigger − rain) ÷ (trigger − exit)</code><p>Same readings in, same amount out. Anyone can recompute it.</p></div>
+        <div className="lp-cell lp-c2 lp-r3 lp-proof" data-reveal style={{ ['--d' as string]: '290ms' }}><small>A real devnet run</small><p className="lp-proof-num">30.6 mm <i>vs</i> 23.7 mm</p><p>Two forecasts for Warsaw disagreed. The part both agree on was paid at once; the rest was held.</p></div>
+        <div className="lp-cell lp-c3 lp-r3 lp-proof" data-reveal style={{ ['--d' as string]: '305ms' }}><small>What the AI wrote</small><blockquote>“The satellite NDVI reading is 0.20, which maps to a payout ratio of 1.000, indicating total loss and conflicting sharply with the rainfall data.”</blockquote><p>Escalated to a person. No money moved on its word.</p></div>
         <div className="lp-cell lp-c4 lp-r3" data-reveal style={{ ['--d' as string]: '320ms' }}><p>When two sources disagree, an AI watchdog writes down what it sees for a human reviewer. It never sets or changes an amount, releases the escrow or sends a payment. Only a person can.</p></div>
       </div>
     </section>
@@ -166,7 +173,7 @@ export default function Landing() {
         <p>Create a policy, force a disagreement, and watch the floor pay while the dispute waits.</p>
         <div className="lp-actions"><a className="lp-pill lp-pill-light" href="#playground">Open the playground</a><a className="lp-pill" href={explorer('address', WALLET)} target="_blank" rel="noreferrer">Watch the wallet <ArrowUpRight size={14}/></a></div>
       </div>
-      <div className="lp-close-foot"><span>Agent Pay</span><span>Parametric cover. Deterministic payouts.</span><span className="lp-sol"><svg className="sol-mark" viewBox="0 0 24 20" aria-hidden="true"><path d="M4.6 0h19.4l-4.6 4.8H0z"/><path d="M4.6 7.6h19.4L19.4 12.4H0z"/><path d="M4.6 15.2h19.4L19.4 20H0z"/></svg> Hackathon prototype · Solana devnet</span></div>
+      <div className="lp-close-foot"><Brand size={20}/><span>Parametric cover. Deterministic payouts.</span><span className="lp-sol"><svg className="sol-mark" viewBox="0 0 24 20" aria-hidden="true"><path d="M4.6 0h19.4l-4.6 4.8H0z"/><path d="M4.6 7.6h19.4L19.4 12.4H0z"/><path d="M4.6 15.2h19.4L19.4 20H0z"/></svg> Hackathon prototype · Solana devnet</span></div>
     </section>
   </div>;
 }

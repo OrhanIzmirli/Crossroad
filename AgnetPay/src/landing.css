@@ -128,3 +128,15 @@ html.lp-light{background:#F4EFE7;color-scheme:light}html.lp-light body{backgroun
 
 /* Solid pills on the paper-coloured sections: white text on the theme accent (the generic .lp a colour would win otherwise) */
 .lp .lp-pill-solid{color:#fff}
+
+.lp-hero-logo{position:absolute;top:18px;left:18px;z-index:5;display:block;line-height:0;border-radius:25%;transition:transform .2s ease}.lp-hero-logo:hover{transform:scale(1.05)}.lp-hero-logo:focus-visible{outline:2px solid #fff;outline-offset:4px}
+.lp-hero-logo .brand-mark{width:44px;height:44px;filter:drop-shadow(0 4px 12px #0004)}
+.lp-r1{grid-row:1;align-self:end;padding-bottom:18px}
+.lp-role span{display:inline-block;padding:5px 12px;border:1px solid var(--line);border-radius:999px;font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--orange-deep)}
+.lp-proof{align-self:start;padding-top:28px;display:grid;gap:8px}
+.lp-proof small{font-size:11.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--orange-deep)}
+.lp-proof code{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:13.5px;line-height:1.5;color:var(--ink);background:#ffffffa6;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.lp-proof p{margin:0;font-size:14.5px;line-height:1.55;color:var(--ink);opacity:.85}
+.lp-proof .lp-proof-num{font-size:26px;font-weight:500;letter-spacing:-.02em;color:var(--orange-deep);opacity:1}.lp-proof-num i{font-style:normal;font-size:15px;opacity:.6}
+.lp-proof blockquote{margin:0;padding-left:12px;border-left:2px solid var(--orange);font-size:15px;line-height:1.5;font-style:italic;color:var(--ink)}
+@media(max-width:750px){.lp-statement .lp-role{display:none}.lp-statement .lp-proof{grid-column:1/-1;grid-row:auto;padding-top:20px}}

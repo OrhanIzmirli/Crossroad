@@ -34,6 +34,7 @@ from pathlib import Path
 
 from app.escrow import annotate, get_escrow, list_escrows, mark_released, mark_voided, open_escrow  # noqa: F401 - re-exported
 
+import httpx
 from solana.rpc.async_api import AsyncClient
 from solana.exceptions import SolanaRpcException
 from solana.rpc.commitment import Confirmed
@@ -164,22 +165,23 @@ async def check_signature(signature: str, last_valid_block_height: int | None = 
     return "unknown"
 
 
-async def _send_lamports(lamports: int, to_pubkey: Pubkey) -> str:
+async def _send_lamports(lamports: int, to_pubkey: Pubkey, signer: Keypair | None = None) -> str:
     """Build, sign, send and confirm a plain SOL transfer. Returns the signature, raises PaymentPending
     when the outcome cannot be established, RuntimeError when it definitely did not (or cannot) land."""
+    signer = signer or _keypair
     async with AsyncClient(DEVNET_RPC) as client:
         latest_blockhash = await client.get_latest_blockhash()
         ix = transfer(
             TransferParams(
-                from_pubkey=_keypair.pubkey(),
+                from_pubkey=signer.pubkey(),
                 to_pubkey=to_pubkey,
                 lamports=lamports,
             )
         )
         msg = Message.new_with_blockhash(
-            [ix], _keypair.pubkey(), latest_blockhash.value.blockhash
+            [ix], signer.pubkey(), latest_blockhash.value.blockhash
         )
-        tx = Transaction([_keypair], msg, latest_blockhash.value.blockhash)
+        tx = Transaction([signer], msg, latest_blockhash.value.blockhash)
 
         signature = str(tx.signatures[0])  # deterministic: known before (and whatever happens to) the send
         last_valid = latest_blockhash.value.last_valid_block_height
@@ -217,6 +219,54 @@ async def send_payment(amount_sol: float, to_address: str) -> PaymentResult:
         to_address=to_address,
         confirmed_at=time.time(),
     )
+
+
+class PremiumError(Exception):
+    """The premium was not paid (or cannot be proven paid). The message is shown to the user as-is."""
+
+
+FEE_LAMPORTS = 5_000
+
+
+async def collect_demo_premium(amount_sol: float) -> str:
+    """The demo policyholder wallet (service wallet) pays the premium to the insurer. Returns the signature."""
+    lamports = round(amount_sol * LAMPORTS_PER_SOL)
+    balance = await get_wallet_balance(SERVICE_PUBLIC_KEY)
+    if balance * LAMPORTS_PER_SOL < lamports + FEE_LAMPORTS:
+        raise PremiumError(f"The demo wallet has {balance:.4f} SOL, not enough for the {amount_sol:.4f} SOL premium plus the network fee. "
+                           "Pick a smaller cover or top the demo wallet up.")
+    try:
+        return await _send_lamports(lamports, _keypair.pubkey(), signer=_service_keypair)
+    except PaymentPending as p:
+        raise PremiumError(f"The premium transaction {p.signature} could not be confirmed, so no policy was created. "
+                           "Check the demo wallet on Solana Explorer before trying again.") from None
+    except RuntimeError as e:
+        raise PremiumError(f"The premium could not be paid: {e}") from None
+
+
+async def verify_premium(signature: str, payer: str, min_lamports: int, attempts: int = 8) -> None:
+    """Accept a premium the policyholder signed in their own wallet only if the chain shows a successful
+    system transfer of at least `min_lamports` from `payer` to the insurer wallet in that transaction."""
+    tx = None
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        for i in range(attempts):
+            r = await client.post(DEVNET_RPC, json={"jsonrpc": "2.0", "id": 1, "method": "getTransaction",
+                                                    "params": [signature, {"encoding": "jsonParsed", "commitment": "confirmed", "maxSupportedTransactionVersion": 0}]})
+            tx = r.json().get("result")
+            if tx:
+                break
+            await asyncio.sleep(1.5)
+    if not tx:
+        raise PremiumError("The premium transaction was not found on devnet. It may still be confirming; try again in a moment.")
+    if tx["meta"]["err"] is not None:
+        raise PremiumError("The premium transaction failed on-chain, so no policy was created.")
+    for ix in tx["transaction"]["message"]["instructions"]:
+        info = (ix.get("parsed") or {}).get("info", {}) if ix.get("program") == "system" else {}
+        if (ix.get("parsed") or {}).get("type") == "transfer" and info.get("source") == payer \
+                and info.get("destination") == AGENT_PUBLIC_KEY and int(info.get("lamports", 0)) >= min_lamports:
+            return
+    raise PremiumError(f"That transaction is not a premium payment of at least {min_lamports / LAMPORTS_PER_SOL:.4f} SOL "
+                       f"from {payer} to the insurer wallet {AGENT_PUBLIC_KEY}.")
 
 
 async def get_wallet_balance(address: str) -> float:

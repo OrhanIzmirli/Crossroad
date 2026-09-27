@@ -1,5 +1,5 @@
 """
-Agent Pay backend - parametric weather insurance on Solana devnet.
+Crossroad backend (formerly Agent Pay) - parametric weather insurance on Solana devnet.
 
 Flow for POST /policy/{id}/evaluate:
   1. Pull TWO independent rainfall readings for the policy's lat/lon and
@@ -25,6 +25,7 @@ Flow for POST /policy/{id}/evaluate:
 API contract is what the frontend builds against (Swagger at /docs).
 """
 
+import asyncio
 import os
 import time
 from dataclasses import asdict
@@ -38,6 +39,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.data_sources import (
     AGROMONITORING_API_KEY,
+    RAIN_MODEL_A,
+    RAIN_MODEL_B,
     default_field_polygon,
     fetch_rainfall_readings,
     get_reading_source_satellite,
@@ -52,6 +55,9 @@ from app.payment import (
     AGENT_PUBLIC_KEY,
     SERVICE_PUBLIC_KEY,
     PaymentPending,
+    PremiumError,
+    collect_demo_premium,
+    verify_premium,
     check_signature,
     ensure_funded,
     ensure_rent_exempt,
@@ -65,11 +71,11 @@ from app.payment import (
     void_escrow,
 )
 from app.policy_store import get_policy, get_record, list_records, new_policy_id, save_policy
-from app.ticketmaster import fetch_event_status, status_reading
+from app.ticketmaster import fetch_event_status, search_venues, status_reading
 from app.products import catalog, cover_for, product
 from app.proof import build_proof
 
-app = FastAPI(title="Agent Pay - parametric weather insurance")
+app = FastAPI(title="Crossroad - parametric weather insurance")
 
 app.add_middleware(
     CORSMiddleware,
@@ -83,7 +89,10 @@ app.add_middleware(
 SERVICE_WALLET_ADDRESS = os.environ.get("SERVICE_WALLET_ADDRESS") or SERVICE_PUBLIC_KEY
 
 # Hard cap on a single policy so a typo can't drain the demo wallet.
-MAX_SUM_INSURED_SOL = float(os.environ.get("MAX_SUM_INSURED_SOL", "0.05"))
+MAX_SUM_INSURED_SOL = float(os.environ.get("MAX_SUM_INSURED_SOL", "5"))
+# Flat, symbolic premium (share of the cover) paid upfront. Deliberately NOT actuarial pricing.
+PREMIUM_RATE = float(os.environ.get("PREMIUM_RATE", "0.03"))
+_premium_lock = asyncio.Lock()  # one premium check + policy save at a time, so a signature cannot back two policies
 
 SOLANA_CLUSTER = "devnet"
 
@@ -135,6 +144,8 @@ class PolicyCreate(BaseModel):
     ticketmaster_event_id: str | None = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$", description="event products: optional Ticketmaster event id (takes precedence over venue_name)")
     sum_insured_sol: float = Field(..., gt=0, examples=[0.01])
     payee_pubkey: str | None = Field(None, description="defaults to the service wallet")
+    premium_tx_signature: str | None = Field(None, description="premium transfer the policyholder signed in their own wallet; omit to let the demo wallet pay")
+    premium_payer: str | None = Field(None, description="the wallet that signed premium_tx_signature")
     window_start: str | None = Field(None, description="ISO date, inclusive; default = 7 days ago")
     window_end: str | None = Field(None, description="ISO date, inclusive; default = yesterday")
     # Cover direction. DECISION (flagged): excess-rain cover reuses the SAME
@@ -310,7 +321,12 @@ async def _collect_readings(policy: Policy, req: EvaluateRequest | None, warning
 
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "Agent Pay backend", "mode": "parametric-insurance"}
+    return {"status": "ok", "service": "Crossroad backend", "mode": "parametric-insurance"}
+
+
+@app.get("/venues")
+async def venues(q: str = Query("", max_length=80)):
+    return {"venues": await search_venues(q)}
 
 
 @app.get("/wallet/balance", response_model=BalanceResponse)
@@ -337,8 +353,8 @@ def escrow_ledger():
     return {"escrows": [_with_links(e) for e in list_escrows()]}
 
 
-@app.post("/policy", status_code=201)
-def create_policy(req: PolicyCreate):
+@app.post("/policy", status_code=201, responses={402: {"description": "Premium not paid"}, 409: {"description": "Premium transaction already used"}})
+async def create_policy(req: PolicyCreate):
     # Resolve the product layer: everything below this block is the original engine.
     ptype = (req.product_type or ProductType.CROP_DROUGHT).value
     prod = product(ptype)
@@ -377,7 +393,33 @@ def create_policy(req: PolicyCreate):
     if start > end:
         raise HTTPException(422, "window_start must not be after window_end")
 
-    policy = Policy(
+    premium = round(req.sum_insured_sol * PREMIUM_RATE, 9)
+    async with _premium_lock:
+        if req.premium_tx_signature:
+            payer = (req.premium_payer or "").strip()
+            if not _looks_like_pubkey(payer):
+                raise HTTPException(422, "premium_payer must be the Solana address that signed the premium")
+            if any(r.get("premium_tx_signature") == req.premium_tx_signature for r in list_records()):
+                raise HTTPException(409, "This premium transaction has already been used for another policy.")
+            try:
+                await verify_premium(req.premium_tx_signature, payer, round(premium * 1_000_000_000))
+            except PremiumError as e:
+                raise HTTPException(402, str(e)) from None
+            premium_sig = req.premium_tx_signature
+        else:
+            payer = SERVICE_PUBLIC_KEY
+            try:
+                premium_sig = await collect_demo_premium(premium)
+            except PremiumError as e:
+                raise HTTPException(402, str(e)) from None
+        policy = _new_policy(req, ptype, payee, start, end, metric_unit, metric_label)
+        policy.premium_sol, policy.premium_tx_signature, policy.premium_payer = premium, premium_sig, payer
+        save_policy(policy)
+    return _policy_response(policy.id)
+
+
+def _new_policy(req: "PolicyCreate", ptype: str, payee: str, start: str, end: str, metric_unit: str, metric_label: str) -> Policy:
+    return Policy(
         id=new_policy_id(),
         region=req.region.strip(),
         lat=req.lat,
@@ -398,15 +440,14 @@ def create_policy(req: PolicyCreate):
         venue_name=(req.venue_name or "").strip() or None if ptype == ProductType.EVENT_WEATHER_CANCEL.value else None,
         ticketmaster_event_id=req.ticketmaster_event_id if ptype == ProductType.EVENT_WEATHER_CANCEL.value else None,
     )
-    save_policy(policy)
-    return _policy_response(policy.id)
 
 
 @app.get("/products")
 def list_products():
     """One settlement engine, pluggable across verticals: the catalog the
     Playground presets are built from."""
-    return {"formula": "payout_ratio = clamp((trigger - observed) / (trigger - exit), 0, 1)", "products": catalog()}
+    return {"formula": "payout_ratio = clamp((trigger - observed) / (trigger - exit), 0, 1)", "products": catalog(), "max_sum_insured_sol": MAX_SUM_INSURED_SOL, "premium_rate": PREMIUM_RATE, "insurer_wallet": AGENT_PUBLIC_KEY, "satellite_live": bool(AGROMONITORING_API_KEY),
+            "rain_models": {"a": RAIN_MODEL_A, "b": RAIN_MODEL_B}}
 
 
 @app.get("/policy/{policy_id}/satellite/image", responses={200: {"content": {"image/png": {}}}, 404: {"description": "No satellite evidence for this policy"}})

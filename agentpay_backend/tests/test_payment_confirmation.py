@@ -91,6 +91,8 @@ def api(tmp_path, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(main, "send_payment", fake_send)
     monkeypatch.setattr(main, "check_signature", fake_check)
+    async def fake_premium(amount_sol): return "premium-sig"
+    monkeypatch.setattr(main, "collect_demo_premium", fake_premium)  # hermetic: no premium transfer on devnet
     return TestClient(main.app), sends, state       # no `with`: startup (airdrop etc.) is not run
 
 

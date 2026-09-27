@@ -58,6 +58,10 @@ class Policy:
     # A floor payment that was submitted but whose confirmation could not be established. While set, evaluate
     # re-checks THIS transaction and never sends another (see payment.PaymentPending).
     pending_payment: dict | None = None
+    # Flat demo premium, paid upfront to the insurer wallet before the policy exists. Not refundable.
+    premium_sol: float = 0.0
+    premium_tx_signature: str | None = None
+    premium_payer: str | None = None
 
 
 @dataclass
