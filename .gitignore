@@ -11,3 +11,18 @@ agentpay_backend/escrow_ledger.json
 agentpay_backend/satellite_cache.json
 *.bak-*
 .DS_Store
+Thumbs.db
+.venv/
+venv/
+
+# Secrets and local config: never commit these. Use the .example files as templates.
+.env
+.env.*
+!.env.example
+
+# Solana keypairs (private keys)
+wallet.json
+service_wallet.json
+id.json
+*.keypair
+*keypair*.json
