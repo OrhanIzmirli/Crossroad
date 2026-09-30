@@ -12,7 +12,7 @@ import './landing.css';
 // Each section carries a data-theme (farm, event, flight, ai, close); the section in view sets the palette on .lp.
 const PHOTO = '/hero-wheat.jpg';
 const AERIAL = '/hero-aerial.jpg';
-const WALLET = 'D93HiJbqXdt13pQxmehaqFvYGieRGrvXHxcVXt584N8B';
+const WALLET = 'C5YQewQjTdvTzxf2mLdDYsfe2FyPjRVynCQfp4RBXA8T';
 const Curtain = () => <div className="lp-curtain" aria-hidden="true"><i/><i/><i/><i/><i/></div>;
 
 export default function Landing() {
