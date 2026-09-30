@@ -16,8 +16,6 @@ Thumbs.db
 venv/
 
 # Secrets and local config: never commit these. Use the .example files as templates.
-.env
-.env.*
 !.env.example
 
 # Solana keypairs (private keys)
@@ -26,3 +24,4 @@ service_wallet.json
 id.json
 *.keypair
 *keypair*.json
+config.bat
