@@ -14,7 +14,7 @@ Traditional parametric insurance still relies on a single data feed and a manual
 
 Crossroad reads three independent weather models for every policy (plus a satellite crop-health index where relevant) and applies a deterministic formula to decide how much is owed. The middle reading sets the payout, which is paid at once: no adjuster, no approval, no waiting. An AI writes a plain explanation of every payout, but it never sets or moves an amount.
 
-Every payout is a real transaction on Solana devnet, verifiable on [Solana Explorer](https://explorer.solana.com/address/D93HiJbqXdt13pQxmehaqFvYGieRGrvXHxcVXt584N8B?cluster=devnet).
+Every payout is a real transaction on Solana devnet, verifiable on [Solana Explorer](https://explorer.solana.com/address/C5YQewQjTdvTzxf2mLdDYsfe2FyPjRVynCQfp4RBXA8T?cluster=devnet).
 
 ## Products
 
