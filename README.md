@@ -1,6 +1,8 @@
 # Crossroad
 
-*Formerly Agent Pay.* Where agents meet payments.
+Built at Blockchain Hack Warsaw by Orhan Izmirli. Hackathon prototype, not actively maintained.
+
+*Formerly Agent Pay.* Parametric cover with deterministic payouts on Solana.
 
 Parametric insurance that settles itself: three independent data sources decide the payout, and the money moves on Solana the moment the rule is hit — no adjuster, no claim form, no waiting.
 
@@ -8,7 +10,9 @@ Built at Blockchain Hack Warsaw (Colosseum hackathon).
 
 ## The problem
 
-Traditional parametric insurance still relies on a single data feed and a manual claims process: a loss report, an adjuster visit, a paper trail. The policyholder waits — often a full season for a crop, or weeks for a delayed flight — for a payout that a simple formula could have already resolved.
+Traditional, indemnity-based insurance pays for an assessed loss, so every payout goes through a claim form, a loss report and an adjuster visit. The policyholder waits, often a full season for a crop or weeks for a delayed flight.
+
+Parametric insurance removes that step by paying when a measured event crosses a threshold, but many products then depend on a single data source. If that one feed is wrong, late or manipulated, the payout is wrong too.
 
 ## The solution
 
@@ -44,7 +48,7 @@ This is a monorepo with three parts:
 
 ```
 ┌──────────────────┐        ┌───────────────────────┐        ┌──────────────────────────┐
-│  AgnetPay          │  HTTP  │  agentpay_backend       │  RPC   │  agent_pay_vault           │
+│  AgentPay          │  HTTP  │  agentpay_backend       │  RPC   │  agent_pay_vault           │
 │  React + Vite + TS │ ─────▶ │  FastAPI policy engine, │ ─────▶ │  Anchor program, devnet    │
 │  frontend           │        │  data fetch, AI         │        │  escrow PDAs               │
 │                     │        │  watchdog, wallet       │        │  release / void authority  │
@@ -55,7 +59,7 @@ This is a monorepo with three parts:
                         (via Agromonitoring) · Ticketmaster
 ```
 
-- **`AgnetPay/`** — the frontend. Calls the backend over HTTP, shows the Playground (create/evaluate a policy) and Activity (insurer wallet + on-chain history) views.
+- **`AgentPay/`** — the frontend. Calls the backend over HTTP, shows the Playground (create/evaluate a policy) and Activity (insurer wallet + on-chain history) views.
 - **`agentpay_backend/`** — a FastAPI service. Creates and evaluates policies, aggregates weather/satellite/event/delay data, computes the payout formula, pays the median amount from an insurer wallet on Solana devnet in one transaction, and writes a plain explanation of every payout (Groq, or rule-based sentences).
 - **`agent_pay_vault/`** — an Anchor (Rust) escrow program deployed to Solana devnet. Not used by new policies since the median payout (nothing is held any more); kept for policies evaluated before that.
 
@@ -73,10 +77,10 @@ This is a monorepo with three parts:
 
 Each part is run separately; see each folder's own README for details.
 
-### Frontend (`AgnetPay/`)
+### Frontend (`AgentPay/`)
 
 ```sh
-cd AgnetPay
+cd AgentPay
 npm install
 cp .env.example .env.local   # point VITE_PROXY_TARGET at your backend if not localhost:8000
 npm run dev

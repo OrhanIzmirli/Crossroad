@@ -1,6 +1,6 @@
 # Crossroad
 
-*Formerly Agent Pay.* Where agents meet payments.
+*Formerly Agent Pay.* Parametric cover with deterministic payouts on Solana.
 
 Parametric insurance that settles itself: two independent data sources decide the payout, and the money moves on Solana the moment the rule is hit — no adjuster, no claim form, no waiting.
 
@@ -8,7 +8,9 @@ Built at Blockchain Hack Warsaw (Colosseum hackathon).
 
 ## The problem
 
-Traditional parametric insurance still relies on a single data feed and a manual claims process: a loss report, an adjuster visit, a paper trail. The policyholder waits — often a full season for a crop, or weeks for a delayed flight — for a payout that a simple formula could have already resolved.
+Traditional, indemnity-based insurance pays for an assessed loss, so every payout goes through a claim form, a loss report and an adjuster visit. The policyholder waits, often a full season for a crop or weeks for a delayed flight.
+
+Parametric insurance removes that step by paying when a measured event crosses a threshold, but many products then depend on a single data source. If that one feed is wrong, late or manipulated, the payout is wrong too.
 
 ## The solution
 
